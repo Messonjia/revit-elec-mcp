@@ -368,3 +368,38 @@ The official mcp Python package gives you two levels:
   The SDK handles all of this automatically. You declare what you expose (tools, resources, etc.)
   when you build the server object, and the SDK negotiates the capability exchange for you. You
   write zero handshake code.
+
+  The minimum to expose one tool
+
+  Three things must exist:
+
+  1. A FastMCP instance — this is your server. It holds your name/version and the capability
+  registry.
+  2. A decorated function — @mcp.tool() on a typed Python function. The SDK reads the function's
+  name, docstring, and type annotations to auto-generate the JSON Schema that describes the tool
+  to the client. No schema writing by hand.
+  3. A run() call — mcp.run(transport="stdio") at the bottom, under if __name__ == "__main__".
+  This starts the event loop and blocks, reading JSON-RPC from stdin forever.
+
+  When the client calls your tool, the flow is:
+  - Client sends tools/call with {"name": "your_function", "arguments": {...}}
+  - SDK validates arguments against the generated schema
+  - SDK calls your function with those arguments as kwargs
+  - Your function returns a value (string, or explicitly a list of TextContent/ImageContent)
+  - SDK wraps it in a tools/call response and writes it to stdout
+
+
+  05.08 Restart here:
+   Recap:
+
+  - FastMCP("revit-elec-mcp") creates the server and registers its name for the handshake —
+  there's no separate version param in this SDK version
+  - @mcp.tool() does three things at once: registers the tool, derives the name from the function
+  name, and builds the JSON Schema from the type annotations
+  - The docstring becomes the tool description the LLM sees when deciding whether to call it —
+  write it like you're talking to a model, not a human
+  - mcp.run(transport="stdio") is the blocking event loop; nothing above it runs after that line
+  - A plain str return is all you need — the SDK wraps it in TextContent automatically
+
+  Question you should be able to answer: If you added a second parameter count: int to ping, what
+  would change about what the client receives during capability negotiation, and what would happen   if the client passed "three" instead of 3?

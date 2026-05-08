@@ -1,0 +1,14 @@
+The concrete next steps, in order
+Step 1 — Environment (30 min, do alone, no Claude Code). Python 3.10+, uv or poetry for package management, install the official mcp Python SDK from PyPI. Verify with python -c "import mcp; print(mcp.__version__)". Doing this yourself rather than letting Claude Code do it means you'll know what's actually installed when something breaks later.
+
+Step 2 — Read the Architecture sub-page of the spec (45 min, alone). Specifically the transport section. You need to make one decision before writing code: stdio transport for now. It's what Claude Desktop uses by default, it's the simplest, and it sidesteps the HTTP/SSE complexity. You'll likely move to HTTP later when bridging to Revit's C# process, but not yet.
+
+Step 3 — Build the hello_world server (Claude Code, teaching mode on). This is your first real session. Prompt to start with:
+
+Before writing any code, walk me through the structure of a minimal MCP server in Python using the official SDK. What are the entry points, what does the initialization handshake look like in code, and what's the minimum I need to expose one tool? Don't write code yet — explain the shape, then I'll say go.
+
+Read the explanation. Push back on anything vague. Then say go and let it write the smallest possible server with one tool. Should be ~50 lines.
+Step 4 — Wire it into Claude Desktop and watch it run. Edit your Claude Desktop config (claude_desktop_config.json), point it at your server, restart Claude Desktop, and call the tool from a chat. The first time you see Claude actually invoke your tool and get a response back, the whole protocol clicks. This is the moment that's worth more than any amount of spec reading.
+Step 5 — Rebuild it from scratch (Karpathy pattern, alone, no Claude Code). Close the file. New file. Rebuild the hello_world server with the SDK docs open but Claude Code closed. If you get stuck, don't reach for Claude Code — open the SDK source on GitHub and read it. This is non-negotiable for the learning goal.
+Step 6 — Now add the first Revit-shaped tool, but still fake. Add a tool called query_elements that returns hardcoded JSON pretending to be Revit elements. No Revit yet. The point: practice tool schema design (parameters, descriptions, return types) without the Revit complexity. This is also where you start thinking about what your tool interface should look like — what would an LLM agent actually want to ask about a Revit model? The answer to that question is more important than any code, and it's the part your domain experience makes uniquely valuable.
+Step 7 — Only now, start the Revit bridge. This is where the C# / pyRevit decision lives, and it deserves its own session. Don't blur it into MCP work. 
