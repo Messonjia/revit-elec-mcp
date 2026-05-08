@@ -349,3 +349,22 @@ Failure modes, in rough order of frequency: wrong Python version, wrong venv act
 - **Read errors literally.** "no attribute" ≠ "no module." Different problems, different fixes.
 - **`uv` is the right call by 2026.** Consolidates 15 years of Python tooling pain into one fast tool. Karpathy uses it; the MCP SDK uses it; the ecosystem is converging on it.
 - **`uv run` is the daily workhorse.** Guarantees the right environment without manual activation.
+
+The official mcp Python package gives you two levels:                                                             
+  - FastMCP — a decorator-driven high-level wrapper. You annotate functions, it handles the
+  plumbing. This is what you want 95% of the time.
+  - Server — the raw low-level class. You manually register handlers for each JSON-RPC method.
+  Useful to understand, rarely what you write directly.
+
+  The initialization handshake
+
+  MCP is JSON-RPC 2.0 over a transport (for local use: stdio — the client writes to your process's   stdin, reads from stdout). The handshake is three steps:
+
+  1. Client → Server: initialize request — sends protocol version and what capabilities the client   supports (tools, resources, prompts, sampling…)
+  2. Server → Client: initialize response — server declares its own protocol version and which
+  capabilities it exposes
+  3. Client → Server: initialized notification — "OK, we're live"
+
+  The SDK handles all of this automatically. You declare what you expose (tools, resources, etc.)
+  when you build the server object, and the SDK negotiates the capability exchange for you. You
+  write zero handshake code.
