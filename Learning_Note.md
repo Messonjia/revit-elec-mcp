@@ -403,3 +403,56 @@ The official mcp Python package gives you two levels:
 
   Question you should be able to answer: If you added a second parameter count: int to ping, what
   would change about what the client receives during capability negotiation, and what would happen   if the client passed "three" instead of 3?
+
+---
+
+## Step 7 Decision Point: The Revit Bridge
+
+### The architectural problem
+
+The MCP server (`main.py`) is a separate Python process. Revit's API is only accessible from
+inside Revit's own process. They cannot talk directly. A bridge is required.
+
+```
+Claude Desktop → stdio → Python MCP server → [BRIDGE] → Revit API (inside Revit process)
+```
+
+### What the reference project does (mcp-servers-for-revit on GitHub)
+
+They used: **TypeScript MCP server → WebSocket → C# Revit plugin → Revit API**
+
+Three-tier architecture:
+1. TypeScript MCP server — exposes tools to Claude Desktop over stdio
+2. C# Revit plugin — loads into Revit at startup, listens on a WebSocket
+3. C# command set — implements the actual Revit API calls
+
+The transport between the MCP server and the plugin was WebSocket. Named pipes and local HTTP
+are other common choices — same pattern, different wire protocol.
+
+### Our options
+
+**Option A — pyRevit (Python inside Revit)**
+- Python scripts that run inside Revit's process, with access to the Revit API
+- Stays in Python on both sides — consistent with existing skill set
+- Downside: pyRevit has version dependency quirks and some maintenance gaps
+- Good for: moving fast, staying in Python, learning the Revit API without C#
+
+**Option B — C# Revit addin**
+- A .dll loaded by Revit at startup, written in C#
+- Full, first-class access to the Revit API — the officially supported path
+- Plugin opens a local socket; MCP server calls it from Python
+- Downside: requires learning C#
+
+### Decision for now
+
+**Start with pyRevit** to maintain momentum and keep the bridge in Python.
+Learn C# when pyRevit hits a real ceiling — that way C# learning is attached to a concrete
+problem, which is the fastest way to absorb a new language.
+
+### Why C# is worth learning eventually
+
+The entire AEC desktop software ecosystem (Revit, Rhino, AutoCAD, Navisworks) exposes its APIs
+in C#/.NET. Python bindings exist but are always second-class. If the goal is building tools
+that plug into live models — not just processing exported data — C# will eventually be required.
+Given a Python background, productive C# is achievable within a few weeks of focused practice.
+The syntax is more verbose but the logic transfers directly.
