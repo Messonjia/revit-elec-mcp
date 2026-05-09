@@ -105,19 +105,19 @@ Add parameters one at a time. Verify each against what you can see in Revit manu
 Decide what "clash detection" means for your use case before writing any code.
 Two likely options:
 
-**Option A — Geometric clashes** (conduit/cable tray intersecting structure)
-Uses `FilteredElementCollector` + `ElementIntersectsSolidFilter` or
-`ElementIntersectsElementFilter`. More complex, requires understanding of Revit's
-geometric API.
+**Decided: geometric clashes, electrical-vs-electrical included.**
 
-**Option B — Electrical rule violations** (overcrowded panels, missing circuits,
-load imbalance)
-Uses parameter reads and logic — much simpler, more immediately useful for electrical
-coordination work.
+Not just MEP vs. structure — conduit running into conduit is a real daily problem.
+Revit's built-in interference check supports same-category clashes; we'll use that.
 
-Start a session with: "Before writing code, explain the tradeoff between geometric
-clash detection and electrical rule checking in Revit. What API classes are involved
-in each?" Then decide.
+Relevant API: `ElementIntersectsElementFilter` lets you take one element and find
+everything in the model that geometrically intersects it. Run it across all conduit,
+cable tray, and electrical equipment — not just cross-category.
+
+Start a session with: "Before writing code, explain how ElementIntersectsElementFilter
+works, what its performance characteristics are on a large model, and whether Revit's
+built-in InterferenceCheckingService is a better entry point than rolling our own
+collector loop." Then decide.
 
 ---
 
