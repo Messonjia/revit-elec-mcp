@@ -8,12 +8,12 @@ language — Claude queries the model and reasons over the results.
 
 A bridge between Claude Desktop and Autodesk Revit, built in two layers:
 
-1. **MCP server** (`main.py`) — a Python process that exposes Revit data as tools Claude
-   can call. Runs locally, communicates with Claude Desktop over stdio.
+1. **MCP server** (`mcp_server/main.py`) — a Python process that exposes Revit data as tools
+   Claude can call. Runs locally, communicates with Claude Desktop over stdio.
 
-2. **Revit bridge** (pyRevit, coming in Step 7) — a Python script running *inside* Revit's
-   process with full API access. Exposes a local HTTP endpoint. The MCP server calls it to
-   get live model data.
+2. **Revit add-in** (`revit_addin/`) — a C# add-in that loads into Revit at startup, exposes
+   a WebSocket server on localhost, and executes Revit API calls on the UI thread via
+   `ExternalEvent`. The MCP server connects to it to get live model data.
 
 ## Architecture
 
@@ -21,57 +21,65 @@ A bridge between Claude Desktop and Autodesk Revit, built in two layers:
 Claude Desktop
     │  JSON-RPC over stdio
     ▼
-main.py  (MCP server — Python, runs outside Revit)
-    │  HTTP  →  localhost:PORT
+mcp_server/main.py  (Python, runs outside Revit)
+    │  WebSocket  →  localhost:8765
     ▼
-pyRevit script  (runs inside Revit's process)
+revit_addin/  (C# IExternalApplication, loaded by Revit at startup)
     │  Revit API
     ▼
 Live .rvt model
 ```
 
+The key threading constraint: Revit's API can only be called from the UI thread.
+The WebSocket server runs on a background thread and schedules work via `ExternalEvent`,
+which is Revit's sanctioned way to post work back to the UI thread.
+
 ## Tools
 
 | Tool | Description | Status |
 |---|---|---|
-| `ping` | Verify the server is reachable | Done |
-| `query_elements` | Query electrical elements by voltage, ampere, location, or load classification | Fake data (Step 6) |
-| `query_elements` (real) | Same tool, live Revit data via pyRevit bridge | Planned (Step 7) |
-| Clash detection | TBD | Planned |
+| `ping` | Verify the MCP server is reachable | Done |
+| `query_elements` | Return all electrical elements from the live model | Fake data (Step 6) |
+| `query_elements` (real) | Same tool, live Revit data via C# add-in | Planned (Step 7) |
 
 ## Current state
 
 - MCP server scaffolded with `ping` and `query_elements` (hardcoded fake data)
 - Wired into Claude Desktop and confirmed working end-to-end
-- pyRevit bridge not yet built — `query_elements` returns fake elements until Step 7
+- C# add-in not yet built — `query_elements` returns fake elements until Step 7
 
 ## Stack
 
 - **Python 3.12** with `uv` for package management
-- **FastMCP** (official Anthropic MCP SDK) for the server layer
-- **pyRevit** for the Revit-side bridge (planned)
+- **FastMCP** (official Anthropic MCP SDK) for the MCP server layer
+- **websockets** (Python async library) for the WebSocket client
+- **C# / .NET 8** for the Revit add-in
+- **Revit 2024** as the target Revit version
 - **Claude Desktop** as the MCP client
 
 ## Setup
 
+**Python MCP server:**
 ```powershell
-# Clone and install dependencies
-git clone https://github.com/Messonjia/revit-elec-mcp.git
-cd revit-elec-mcp
+cd mcp_server
 uv sync
-
-# Run the server manually (should hang — waiting for MCP client)
-.venv\Scripts\python.exe main.py
+.venv\Scripts\python.exe main.py   # blocks, waiting for MCP client
 ```
 
-To connect to Claude Desktop, add to `claude_desktop_config.json`:
+**C# Revit add-in:**
+```powershell
+cd revit_addin
+dotnet build                        # builds and copies .dll + .addin to Revit's addins folder
+# then restart Revit
+```
 
+**Claude Desktop** — add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "revit-elec-mcp": {
-      "command": "<absolute-path-to-repo>\\.venv\\Scripts\\python.exe",
-      "args": ["<absolute-path-to-repo>\\main.py"]
+      "command": "<absolute-path>\\mcp_server\\.venv\\Scripts\\python.exe",
+      "args": ["<absolute-path>\\mcp_server\\main.py"]
     }
   }
 }
