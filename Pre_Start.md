@@ -19,8 +19,12 @@ Step 7 — Only now, start the Revit bridge. This is where the C# / pyRevit deci
 
 Do these in order, alone, before any Claude Code sessions:
 
-1. **pyRevit official docs** — https://pyrevitlabs.notion.site/
-   Read the "Getting Started" and "Anatomy of a pyRevit extension" sections.
+1. **pyRevit official docs** — https://docs.pyrevitlabs.io/
+   The Notion site (pyrevitlabs.notion.site) is outdated — use the new docs site.
+   Read these two pages:
+   - Architecture overview: https://docs.pyrevitlabs.io/architecture/
+   - Extension anatomy (bundles, tabs, panels): https://pyrevit1.readthedocs.io/en/latest/creatingexts.html
+     (older version but clearest explanation of the `.pushbutton` bundle structure)
    You need to understand: what an extension is, what a script button is, and how
    pyRevit loads Python scripts into Revit's process.
 
