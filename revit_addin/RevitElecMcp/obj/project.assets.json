@@ -1,0 +1,180 @@
+{
+  "version": 3,
+  "targets": {
+    "net8.0-windows7.0": {
+      "Nice3point.Revit.Api.RevitAPI/2024.3.40": {
+        "type": "package",
+        "compile": {
+          "ref/net48/RevitAPI.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "Nice3point.Revit.Api.RevitAPIUI/2024.3.40": {
+        "type": "package",
+        "compile": {
+          "ref/net48/RevitAPIUI.dll": {
+            "related": ".xml"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Nice3point.Revit.Api.RevitAPI/2024.3.40": {
+      "sha512": "tcHiGfthcFJxJyiUyQB+NUOAmLRjpUR+aVOo4E1QxbiqMtDaPrLVwSqrBCZBb9in2Hswr7cywnKR+wtMC7S/Ug==",
+      "type": "package",
+      "path": "nice3point.revit.api.revitapi/2024.3.40",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "License.md",
+        "Readme.md",
+        "images/PackageIcon.png",
+        "nice3point.revit.api.revitapi.2024.3.40.nupkg.sha512",
+        "nice3point.revit.api.revitapi.nuspec",
+        "ref/net48/RevitAPI.dll",
+        "ref/net48/RevitAPI.xml"
+      ]
+    },
+    "Nice3point.Revit.Api.RevitAPIUI/2024.3.40": {
+      "sha512": "r/70xyCQFNd0RUSj9zY0jtIK4JP1+nhlOA2P0md3g2w76uEodB/T9k3OyZ0PhjY3fFpo5zUtqN/ME+rdjaHrHA==",
+      "type": "package",
+      "path": "nice3point.revit.api.revitapiui/2024.3.40",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "License.md",
+        "Readme.md",
+        "images/PackageIcon.png",
+        "nice3point.revit.api.revitapiui.2024.3.40.nupkg.sha512",
+        "nice3point.revit.api.revitapiui.nuspec",
+        "ref/net48/RevitAPIUI.dll",
+        "ref/net48/RevitAPIUI.xml"
+      ]
+    }
+  },
+  "projectFileDependencyGroups": {
+    "net8.0-windows7.0": [
+      "Nice3point.Revit.Api.RevitAPI >= 2024.*",
+      "Nice3point.Revit.Api.RevitAPIUI >= 2024.*"
+    ]
+  },
+  "packageFolders": {
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\": {},
+    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
+  },
+  "project": {
+    "version": "1.0.0",
+    "restore": {
+      "projectUniqueName": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "projectName": "RevitElecMcp",
+      "projectPath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "packagesPath": "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\",
+      "outputPath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\obj\\",
+      "projectStyle": "PackageReference",
+      "fallbackFolders": [
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+      ],
+      "configFilePaths": [
+        "C:\\Users\\XiaSon BaBa\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+      ],
+      "originalTargetFrameworks": [
+        "net8.0-windows"
+      ],
+      "sources": {
+        "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "https://api.nuget.org/v3/index.json": {}
+      },
+      "frameworks": {
+        "net8.0-windows7.0": {
+          "targetAlias": "net8.0-windows",
+          "projectReferences": {}
+        }
+      },
+      "warningProperties": {
+        "warnAsError": [
+          "NU1605"
+        ]
+      },
+      "restoreAuditProperties": {
+        "enableAudit": "true",
+        "auditLevel": "low",
+        "auditMode": "direct"
+      },
+      "SdkAnalysisLevel": "10.0.100"
+    },
+    "frameworks": {
+      "net8.0-windows7.0": {
+        "targetAlias": "net8.0-windows",
+        "dependencies": {
+          "Nice3point.Revit.Api.RevitAPI": {
+            "include": "Compile, Build, Native, ContentFiles, Analyzers, BuildTransitive",
+            "target": "Package",
+            "version": "[2024.*, )"
+          },
+          "Nice3point.Revit.Api.RevitAPIUI": {
+            "include": "Compile, Build, Native, ContentFiles, Analyzers, BuildTransitive",
+            "target": "Package",
+            "version": "[2024.*, )"
+          }
+        },
+        "imports": [
+          "net461",
+          "net462",
+          "net47",
+          "net471",
+          "net472",
+          "net48",
+          "net481"
+        ],
+        "assetTargetFallback": true,
+        "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Ref",
+            "version": "[8.0.23, 8.0.23]"
+          }
+        ],
+        "frameworkReferences": {
+          "Microsoft.NETCore.App": {
+            "privateAssets": "all"
+          }
+        },
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.102/PortableRuntimeIdentifierGraph.json"
+      }
+    }
+  },
+  "logs": [
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "Package 'Nice3point.Revit.Api.RevitAPI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
+      "libraryId": "Nice3point.Revit.Api.RevitAPI",
+      "targetGraphs": [
+        "net8.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "Package 'Nice3point.Revit.Api.RevitAPIUI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
+      "libraryId": "Nice3point.Revit.Api.RevitAPIUI",
+      "targetGraphs": [
+        "net8.0-windows7.0"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+
+    <!-- The name shown in Revit's Add-In Manager. -->
+    <Name>RevitElecMcp</Name>
+
+    <!-- Path to the DLL. When the manifest and DLL are in the same folder
+         (the Addins folder, after the build target copies them), a bare filename
+         is enough. No path prefix needed. -->
+    <Assembly>RevitElecMcp.dll</Assembly>
+
+    <!-- Fully-qualified class name: Namespace.ClassName.
+         Must match exactly — Revit uses reflection to find this. -->
+    <FullClassName>RevitElecMcp.App</FullClassName>
+
+    <!-- A GUID that uniquely identifies this add-in across all of Revit's ecosystem.
+         Generate once, never change — Revit uses this to track the add-in across
+         installs and versions. -->
+    <AddInId>a7c2d8f3-1b4e-4a9c-8d3f-5e7b9a1c2d4f</AddInId>
+
+    <VendorId>RevitElecMcp</VendorId>
+    <VendorDescription>Revit Electrical MCP Bridge</VendorDescription>
+
+  </AddIn>
+</RevitAddIns>

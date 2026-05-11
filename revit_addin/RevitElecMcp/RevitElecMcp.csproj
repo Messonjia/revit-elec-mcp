@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>RevitElecMcp</AssemblyName>
+    <RootNamespace>RevitElecMcp</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Nice3point wraps the Revit API DLLs as NuGet packages so you don't need a
+         local Revit install path hardcoded here. Anyone can clone and build.
+         ExcludeAssets="runtime" is critical: it means "reference this for
+         compilation, but don't copy it to the output folder." At runtime, Revit's
+         own process already has RevitAPI.dll loaded — bundling a second copy
+         causes a conflict and the add-in fails to load. -->
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2025.*">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2025.*">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- After each build, copy the DLL and .addin manifest to the user-level Revit
+       Addins folder. This is the folder Revit scans at startup.
+       $(AppData) resolves to C:\Users\<you>\AppData\Roaming. -->
+  <Target Name="CopyToRevitAddins" AfterTargets="Build">
+    <MakeDir Directories="$(AppData)\Autodesk\Revit\Addins\2025\"
+             Condition="!Exists('$(AppData)\Autodesk\Revit\Addins\2025\')" />
+    <Copy SourceFiles="$(OutputPath)$(TargetFileName)"
+          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\2025\" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\RevitElecMcp.addin"
+          DestinationFolder="$(AppData)\Autodesk\Revit\Addins\2025\" />
+    <Message Text="Copied $(TargetFileName) and RevitElecMcp.addin to Revit Addins folder." Importance="High" />
+  </Target>
+
+</Project>

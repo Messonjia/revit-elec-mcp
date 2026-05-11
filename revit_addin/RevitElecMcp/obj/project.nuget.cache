@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "dgSpecHash": "xBgPpEAMv/k=",
+  "success": true,
+  "projectFilePath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\nice3point.revit.api.revitapi\\2024.3.40\\nice3point.revit.api.revitapi.2024.3.40.nupkg.sha512",
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\nice3point.revit.api.revitapiui\\2024.3.40\\nice3point.revit.api.revitapiui.2024.3.40.nupkg.sha512",
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.23\\microsoft.netcore.app.ref.8.0.23.nupkg.sha512",
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.23\\microsoft.windowsdesktop.app.ref.8.0.23.nupkg.sha512",
+    "C:\\Users\\XiaSon BaBa\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.23\\microsoft.aspnetcore.app.ref.8.0.23.nupkg.sha512"
+  ],
+  "logs": [
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "message": "Package 'Nice3point.Revit.Api.RevitAPI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
+      "projectPath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "warningLevel": 1,
+      "filePath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "libraryId": "Nice3point.Revit.Api.RevitAPI",
+      "targetGraphs": [
+        "net8.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1701",
+      "level": "Warning",
+      "message": "Package 'Nice3point.Revit.Api.RevitAPIUI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
+      "projectPath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "warningLevel": 1,
+      "filePath": "Q:\\Revit_Elec_MCP\\revit_addin\\RevitElecMcp\\RevitElecMcp.csproj",
+      "libraryId": "Nice3point.Revit.Api.RevitAPIUI",
+      "targetGraphs": [
+        "net8.0-windows7.0"
+      ]
+    }
+  ]
+}

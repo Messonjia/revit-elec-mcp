@@ -54,7 +54,7 @@ which is Revit's sanctioned way to post work back to the UI thread.
 - **FastMCP** (official Anthropic MCP SDK) for the MCP server layer
 - **websockets** (Python async library) for the WebSocket client
 - **C# / .NET 8** for the Revit add-in
-- **Revit 2024** as the target Revit version
+- **Revit 2025** as the target Revit version
 - **Claude Desktop** as the MCP client
 
 ## Setup
