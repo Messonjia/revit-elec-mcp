@@ -456,3 +456,73 @@ in C#/.NET. Python bindings exist but are always second-class. If the goal is bu
 that plug into live models — not just processing exported data — C# will eventually be required.
 Given a Python background, productive C# is achievable within a few weeks of focused practice.
 The syntax is more verbose but the logic transfers directly.
+
+---
+
+## Why you can't call the Revit API from a background thread
+
+### The short answer
+
+Revit's API has no thread safety at all — not "limited" thread safety, but none. It can only
+be called from the main UI thread, inside what Revit calls a "valid Revit API context."
+
+### What "valid Revit API context" means
+
+Revit considers the API callable only when *Revit itself* called into your code — via
+`OnStartup`, an event handler, a command's `Execute` method, etc. When your code spins up
+its own background thread (e.g., a WebSocket server), that thread was never called by Revit.
+From Revit's perspective, it doesn't exist.
+
+If you call the API from a background thread anyway, you get one of:
+- `InvalidOperationException`: "Cannot execute Revit API outside of Revit API context"
+- No exception, but silent data corruption that surfaces later in a confusing way
+
+### Why Revit was designed this way
+
+Revit's object model is built on COM internals from the early 2000s. The element store,
+parameter tables, and geometry cache are plain mutable objects — no mutexes, no concurrent
+collections, no copy-on-write. Making it thread-safe would require either locking every
+property access (slow, deadlock-prone) or rewriting the document model from scratch.
+Autodesk chose a simpler rule: all API calls happen on one thread, period.
+
+### ExternalEvent is the solution
+
+`ExternalEvent` is Revit's mechanism for scheduling work from a background thread onto the
+UI thread. Think of it as Revit's version of `Dispatcher.Invoke()` in WPF/WinForms.
+
+The flow:
+```
+Background thread (WebSocket receives request)
+  → stores request payload in a shared field
+  → calls ExternalEvent.Raise()        ← this IS thread-safe; it just sets a flag
+  → blocks on a TaskCompletionSource<string>
+
+Revit UI thread (polling during idle time)
+  → sees the flag
+  → calls IExternalEventHandler.Execute()   ← full Revit API context here
+  → executes the Revit API call safely
+  → writes result into the TaskCompletionSource
+
+Background thread unblocks
+  → sends JSON response over WebSocket
+```
+
+`ExternalEvent.Raise()` does not execute anything. It only sets a flag. Revit checks that
+flag on the UI thread during idle time. Only then does your `Execute()` run — on the UI
+thread, in a valid context, where Revit API calls work.
+
+### The WPF/WinForms analogy
+
+If you've seen `Dispatcher.Invoke()` or `Control.Invoke()` in desktop UI work, this is the
+same idea: you can't update a UI control from a background thread, so you marshal the work
+back to the UI thread. `ExternalEvent` is Revit's version of that marshal.
+
+### Key implication for the architecture
+
+This is why the C# add-in has two moving parts that might otherwise seem redundant:
+
+1. **WebSocket server** — runs on a background thread, handles network I/O
+2. **IExternalEventHandler** — runs on the UI thread, handles Revit API calls
+
+They're not interchangeable. The WebSocket thread handles all the async networking; the
+handler handles all the Revit work. `ExternalEvent` is the handoff point between them.
