@@ -27,9 +27,9 @@ Do these in order, alone, before any Claude Code sessions:
    Reference only. Look up `FilteredElementCollector`, `BuiltInCategory`,
    `ElectricalSystem`, and `BuiltInParameter` as you need them.
 
-2. **Learn Revit API (C#)** — https://www.youtube.com/@LearnRevitAPI
-   Erik Frits's YouTube channel. Watch the C# playlist. He explains
-   `FilteredElementCollector` better than the docs do.
+2. **Learn Revit API (YouTube)** — https://www.youtube.com/channel/UC1LgjdE6zW3HNWg-IGo2d-Q
+   Erik Frits's channel. His examples are Python/pyRevit, but the `FilteredElementCollector`
+   concepts transfer directly to C# — the API shape is identical, only the syntax differs.
 
 3. **Revit API GitHub samples** — https://github.com/jeremytammik/the_building_coder_samples
    Jeremy Tammik's sample code. Search for `IExternalApplication` and
@@ -48,18 +48,18 @@ master them — just build a mental model so you're not confused when you see th
 Revit add-ins can be two things: a `Command` (runs when a user clicks a button) or an
 `Application` (runs at Revit startup and stays alive the whole session). You need
 `Application` because your WebSocket listener must run continuously, not just when clicked.
-Read: https://thebuildingcoder.typepad.com/blog/2010/04/iexternalapplication.html
+Read: https://thebuildingcoder.typepad.com/blog/2022/02/getting-started-once-again.html
 
 **Concept 2 — ExternalEvent**
 The Revit API is not thread-safe. Your WebSocket server will run on a background thread,
 but Revit API calls must happen on the UI thread. `ExternalEvent` is how you schedule
 work from a background thread onto the UI thread safely.
-Read: https://thebuildingcoder.typepad.com/blog/2013/12/external-events.html
+Read: https://thebuildingcoder.typepad.com/blog/2013/12/replacing-an-idling-event-handler-by-an-external-event.html
 
 **Concept 3 — FilteredElementCollector**
 This is the primary way to query elements in a Revit model. You give it a category
 (e.g., electrical fixtures) and it returns matching elements.
-Read: https://www.revitapidocs.com/2024/263cf06b-98be-6f91-c4da-fb47d01688f4.htm
+Read: https://www.revitapidocs.com/2026/263cf06b-98be-6f91-c4da-fb47d01688f3.htm
 
 After reading, you should be able to answer:
 - Why can't I just call the Revit API from my WebSocket thread?
