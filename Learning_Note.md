@@ -707,3 +707,50 @@ What we're building
     complexity with no benefit right now
 
   ---
+  What was just built — 5 bullets:
+
+  - ElementQueryHandler.cs — the only file that touches the Revit API. Execute()
+  runs on the UI thread, calls FilteredElementCollector for OST_ElectricalFixtures,   serializes the result to JSON, then calls tcs.SetResult() to unblock whoever is
+  waiting.
+  - WebSocketServer.cs — runs on a background thread. Accepts one connection,
+  receives any message, creates a fresh TaskCompletionSource, stores it on the
+  handler, calls externalEvent.Raise(), then suspends with await tcs.Task.
+  - App.cs — wires the two together at Revit startup: creates the handler + event
+  on the UI thread (the only valid moment for ExternalEvent.Create), then fires the   server loop on a background thread with Task.Run.
+  - Timeout guard — Task.WhenAny(tcs.Task, Task.Delay(5000)) means a Pending or
+  Denied raise never hangs the WebSocket connection indefinitely.
+  - No new NuGet packages — HttpListener, System.Net.WebSockets, and
+  System.Text.Json are all built into .NET 8.
+  # Question you should be able to answer: If Revit is showing a modal dialog when a
+  WebSocket message arrives and Raise() returns Pending (not Denied), what happens
+  to the background thread — and why does it eventually unblock correctly without
+  any extra code on our part?
+  Answer: Pending means Revit accepted the request but is busy right now (modal dialog,  save in progress, etc.). It will call Execute() once the dialog closes. So:
+  - Background thread suspends on await tcs.Task ✓
+  - User closes the modal → Revit goes idle → Execute() fires → tcs.SetResult() →
+  background thread unblocks → reply sent
+  - Timeout never triggers — Pending always resolves eventually
+
+  Denied is the case the timeout guards against. That means the raise was outright
+  rejected — Execute() will never fire, the TCS will never complete, and without
+  the timeout the WebSocket connection hangs until the client disconnects.
+
+  So the code handles both cases correctly, but for different reasons:
+
+  var status = _externalEvent.Raise();
+  if (status == ExternalEventRequest.Denied)   // ← "never happening" — exit
+  immediately
+  {
+      await SendAsync(ws, ...error...);
+      return;
+  }
+
+  // Pending or Accepted both fall through to here.
+  // Pending: waits a bit longer, but Execute() fires eventually — timeout doesn't
+  trigger.
+  // Denied already returned above, so the only way timeout fires is an unexpected
+  hang.
+  var winner = await Task.WhenAny(tcs.Task, Task.Delay(5000));
+
+  The mental model: Raise() is a question, not a command. Accepted = "I'll do it
+  now." Pending = "I'll do it when I'm free." Denied = "I don't know who you are."

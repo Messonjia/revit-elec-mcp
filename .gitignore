@@ -24,3 +24,6 @@ Thumbs.db
 .env*
 secrets.json
 
+#testing files
+test_ws.py
+
