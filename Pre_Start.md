@@ -82,6 +82,18 @@ journal file (or a message box) on startup. No WebSocket yet, no Revit API queri
 just prove that Revit finds your DLL and runs your code.
 
 **You'll know it worked when:** Revit starts and you see your message.
+Read them in the order Revit itself processes them:
+                                                                  
+  1. RevitElecMcp.addin — start here. This is the only file Revit reads directly.  Everything else flows from it. Understand what each XML tag does before moving on.
+  2. RevitElecMcp.csproj — read this second. It answers "how does the DLL get built and how   does it end up in the Addins folder?" Focus on the ExcludeAssets="runtime" comment and
+  the CopyToRevitAddins build target at the bottom.
+
+  3. App.cs — read last. By this point you already know Revit found the manifest, loaded
+  the DLL, and is looking for the class named in FullClassName. Now you're just reading
+  what that class actually does.
+
+  The mental thread connecting all three: manifest tells Revit where to find the code →
+  .csproj controls how the code is built and deployed → App.cs is what runs.
 
 ---
 

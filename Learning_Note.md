@@ -526,3 +526,161 @@ This is why the C# add-in has two moving parts that might otherwise seem redunda
 
 They're not interchangeable. The WebSocket thread handles all the async networking; the
 handler handles all the Revit work. `ExternalEvent` is the handoff point between them.
+
+---
+
+## ExternalEvent: The Four Pieces (detailed breakdown)
+
+### The four objects you work with
+
+**1. `IExternalEventHandler`**
+An interface with a single method: `Execute(UIApplication app)`. This is where your Revit API
+calls live. It runs on the UI thread — the only place Revit allows API calls.
+
+**2. `ExternalEvent`**
+A wrapper Revit gives you around your handler. Created once at startup with
+`ExternalEvent.Create(yourHandler)`. Hold onto this object for the lifetime of the add-in.
+
+**3. `Raise()`**
+Called from your background thread to ask Revit to run your handler. Does **not** block —
+it just queues the request. Revit calls `Execute()` on its own schedule (typically within
+milliseconds, unless Revit is in a modal dialog or mid-transaction).
+
+**4. Shared state**
+`Execute()` runs on the UI thread. Your WebSocket handler runs on a background thread.
+They communicate through fields on the handler object itself. The standard pattern is
+`TaskCompletionSource<T>`:
+
+- Background thread creates a `TaskCompletionSource<string>`, stores it on the handler
+- Background thread calls `Raise()`, then `await`s the `Task` — this suspends the background thread
+- `Execute()` runs, gets the Revit data, calls `tcs.SetResult(data)` — this unblocks the awaiter
+- Background thread wakes up with the result and sends it over the WebSocket
+
+### The full request/response flow
+
+```
+Background thread (WebSocket)              UI thread (Revit)
+─────────────────────────────              ─────────────────
+Message arrives
+↓
+Write request data into handler fields
+Create TaskCompletionSource, store it
+↓
+Call externalEvent.Raise()
+↓                                          ... Revit event loop fires ...
+await tcs.Task  (suspends)                 ↓
+                                           Execute() runs
+                                           ↓
+                                           Reads request from handler fields
+                                           ↓
+                                           Calls Revit API
+                                           ↓
+                                           Calls tcs.SetResult(data)
+↓
+Background thread unblocks with result
+↓
+Send reply over WebSocket
+```
+
+### Why a mutex wouldn't solve this
+
+You might wonder: could a background thread just lock a mutex around the Revit API call
+and call it directly? No — and the reason is important.
+
+The problem is not *concurrent* access. A mutex prevents two threads from running the same
+code at the same time. But Revit's constraint is different: **the background thread is never
+in a valid state to call the Revit API**, no matter how much you serialize access.
+
+Revit's API requires being on the UI thread because:
+- The element store, parameter tables, and geometry cache are plain mutable objects
+  with no locking mechanisms at all (COM internals from the early 2000s)
+- The UI thread owns the document context — transactions, selection, view state
+- A background thread doesn't have that context, even if nothing else is running
+
+`ExternalEvent` works not because it serializes access, but because it changes *who* is
+making the call. You're not calling Revit from your thread — you're asking *Revit* to call
+*you* back from its own thread, at a moment Revit has chosen as safe.
+
+The mental model: **you're a guest, and `Raise()` is how you knock on the door instead of
+barging in.**
+
+---
+
+## For the first pulgin:
+Read them in the order Revit itself processes them:
+                                                                  
+  1. RevitElecMcp.addin — start here. This is the only file Revit reads directly.  Everything else flows from it. Understand what each XML tag does before moving on.
+  2. RevitElecMcp.csproj — read this second. It answers "how does the DLL get built and how   does it end up in the Addins folder?" Focus on the ExcludeAssets="runtime" comment and
+  the CopyToRevitAddins build target at the bottom.
+
+  3. App.cs — read last. By this point you already know Revit found the manifest, loaded
+  the DLL, and is looking for the class named in FullClassName. Now you're just reading
+  what that class actually does.
+
+  The mental thread connecting all three: manifest tells Revit where to find the code →
+  .csproj controls how the code is built and deployed → App.cs is what runs.
+
+## Websocket server and External Event
+What we're building
+
+  Three files, each with one job:
+  ElementQueryHandler.cs — implements IExternalEventHandler. This is the only place Revit API calls
+  happen. It reads a request from shared state, runs FilteredElementCollector, serializes the result to
+  JSON, then signals the waiting background thread via TaskCompletionSource.
+
+  WebSocketServer.cs — a background listener on localhost:8765. When a message arrives, it stores a
+  TaskCompletionSource on the handler, calls ExternalEvent.Raise(), then awaits the result. When the UI
+  thread signals it, it sends the JSON back over the socket.
+
+  App.cs (updated) — creates the handler and event once at startup, hands them to the server, starts the
+  server on a background thread. Stops it cleanly on shutdown.
+
+  ---
+  Key design choices, and why
+
+  Built-in WebSocket (System.Net.HttpListener) over a NuGet library (Fleck, etc.) — .NET 8 has WebSocket
+  support built in. No extra package, and you can see exactly what the handshake does. Slightly more
+  verbose, but nothing hidden.
+
+  System.Text.Json over Newtonsoft — also built into .NET 8. Newtonsoft is legacy at this point for new
+  .NET code.
+
+  One connection at a time — the Python MCP server sends one request and waits for the reply. No need for
+  concurrent connection handling. Keeping it single-connection makes the state management obvious.
+
+  What data the handler returns — just id and name from OST_ElectricalFixtures for now. The goal of this
+  step is proving the threading model works end-to-end. Once a Python one-liner gets back a real element
+  list, adding more fields (voltage, panel, etc.) is a straight-line exercise.
+
+  ---
+  One footgun to know about
+
+  ExternalEvent.Raise() returns a ExternalEventRequest enum, not a bool. If Revit is busy (inside a modal
+  dialog, saving, etc.) it returns Pending instead of Accepted. In that state, your background thread is
+  already awaiting the TCS — and Execute() will still run eventually, so it'll unblock correctly. But if
+  Revit returns Denied (add-in not registered properly), the TCS will never complete and the WebSocket
+  call will hang forever. We'll add a timeout guard for that.
+
+  ---
+  The shape before code
+
+  App.OnStartup()
+    new ElementQueryHandler → handler
+    ExternalEvent.Create(handler) → externalEvent
+    new WebSocketServer(handler, externalEvent).Start()
+
+  WebSocketServer (background thread)
+    listen on localhost:8765
+    receive {"command": "get_elements"}
+    handler.Tcs = new TaskCompletionSource<string>()
+    externalEvent.Raise()
+    result = await handler.Tcs.Task (with timeout)
+    send result over socket
+
+  ElementQueryHandler.Execute() (UI thread)
+    FilteredElementCollector → OST_ElectricalFixtures
+    serialize to JSON
+    handler.Tcs.SetResult(json)
+
+  App.OnShutdown()
+    WebSocketServer.Stop()

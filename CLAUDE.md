@@ -21,7 +21,7 @@ I'm building this Revit MCP server partly to learn. Default to teaching mode:
 
 # Commands
 
-**Setup (one-time):**
+**Python MCP server setup (one-time):**
 ```powershell
 uv sync   # creates .venv and installs dependencies
 ```
@@ -30,6 +30,12 @@ uv sync   # creates .venv and installs dependencies
 ```powershell
 .venv\Scripts\python.exe main.py
 ```
+
+**Build the C# Revit add-in:**
+```powershell
+dotnet build revit_addin\RevitElecMcp\RevitElecMcp.csproj
+```
+The post-build step automatically copies `RevitElecMcp.dll` and `RevitElecMcp.addin` to `%AppData%\Autodesk\Revit\Addins\2025\`. Restart Revit after each build.
 
 **Wire into Claude Desktop** — edit `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
@@ -57,19 +63,23 @@ main.py  (FastMCP server, runs outside Revit)
 
 `main.py` is the entire server. FastMCP introspects each `@mcp.tool()` decorated function automatically: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
 
-## Planned state (Phase 2 — pyRevit bridge, Step 7)
+## Planned state (Phase 2 — C# add-in bridge, Step 7)
 
 ```
 Claude Desktop
     ↓ JSON-RPC over stdio
 main.py
-    ↓ HTTP GET localhost:9000/elements?...
-pyRevit Routes endpoint (running inside Revit's process)
-    ↓ FilteredElementCollector + ElectricalSystem Revit API
+    ↓ WebSocket ws://localhost:9000
+C# Revit add-in (RevitElecMcp.dll, inside Revit's process)
+    ↓ ExternalEvent → UI thread → FilteredElementCollector
 Live .rvt model
 ```
 
-The key constraint: Revit's API is only callable from inside its own process (IronPython via pyRevit). `main.py` cannot call Revit directly; it must go through an HTTP bridge exposed by a pyRevit script.
+**Key constraints for Phase 2:**
+
+- Revit's API is only callable from its own process on the **UI thread**. The C# add-in uses `ExternalEvent` to marshal calls from the WebSocket background thread onto the UI thread. `main.py` cannot call Revit directly.
+- The C# project targets `net8.0-windows` and references Revit 2025 API via NuGet (`Nice3point.Revit.Api.*`) with `ExcludeAssets="runtime"` — Revit loads its own API DLLs at runtime, don't bundle them.
+- The add-in manifest (`RevitElecMcp.addin`) declares `Type="Application"`, meaning it loads automatically when Revit starts (no user button required).
 
 ## Element schema
 
@@ -78,3 +88,8 @@ Each electrical element carries both element-level data (`voltage`, `ampere`, `l
 ## Package manager
 
 This project uses `uv` (not pip). Always use `uv add <package>` to add dependencies; `uv sync` to install from the lock file. The lock file (`uv.lock`) is committed and should stay in sync.
+
+## Reference documents
+
+- `Pre_Start.md` — step-by-step roadmap (Steps 1–7) with time estimates; Step 7 is the WebSocket + ExternalEvent bridge
+- `Learning_Note.md` — learning journal covering `uv`, MCP protocol mechanics, and the ExternalEvent threading model
