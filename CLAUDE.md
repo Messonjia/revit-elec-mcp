@@ -63,23 +63,43 @@ main.py  (FastMCP server, runs outside Revit)
 
 `main.py` is the entire server. FastMCP introspects each `@mcp.tool()` decorated function automatically: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
 
+## Tool status
+
+| Tool | Description | Status |
+|---|---|---|
+| `ping` | Verify the MCP server is reachable | Done |
+| `query_elements` | Electrical elements filtered by voltage/ampere/location/classification | Fake data (Step 6) |
+| `query_elements` (real) | Same tool, live Revit data via C# add-in | Planned (Step 7) |
+
 ## Planned state (Phase 2 — C# add-in bridge, Step 7)
 
 ```
 Claude Desktop
     ↓ JSON-RPC over stdio
 main.py
-    ↓ WebSocket ws://localhost:9000
+    ↓ WebSocket ws://localhost:8765
 C# Revit add-in (RevitElecMcp.dll, inside Revit's process)
     ↓ ExternalEvent → UI thread → FilteredElementCollector
 Live .rvt model
 ```
 
+**Planned C# file structure for Step 7.4:**
+
+- `App.cs` — creates handler and ExternalEvent at startup, starts WebSocketServer on background thread, stops it on shutdown
+- `ElementQueryHandler.cs` — implements `IExternalEventHandler`; the only place Revit API calls happen. Runs `FilteredElementCollector`, serializes to JSON, signals the awaiting background thread via `TaskCompletionSource`
+- `WebSocketServer.cs` — background listener on `localhost:8765`. On message: stores a `TaskCompletionSource` on the handler, calls `ExternalEvent.Raise()`, awaits the result, sends JSON reply
+
 **Key constraints for Phase 2:**
 
 - Revit's API is only callable from its own process on the **UI thread**. The C# add-in uses `ExternalEvent` to marshal calls from the WebSocket background thread onto the UI thread. `main.py` cannot call Revit directly.
+- `ExternalEvent.Raise()` is non-blocking — it sets a flag. Revit calls `Execute()` on its own schedule (typically within milliseconds, unless Revit is in a modal dialog). If it returns `Denied`, the `TaskCompletionSource` will never complete — add a timeout guard.
 - The C# project targets `net8.0-windows` and references Revit 2025 API via NuGet (`Nice3point.Revit.Api.*`) with `ExcludeAssets="runtime"` — Revit loads its own API DLLs at runtime, don't bundle them.
 - The add-in manifest (`RevitElecMcp.addin`) declares `Type="Application"`, meaning it loads automatically when Revit starts (no user button required).
+
+**Reading order for the addin files** (the order Revit itself processes them):
+1. `RevitElecMcp.addin` — only file Revit reads directly; everything else flows from it
+2. `RevitElecMcp.csproj` — how the DLL is built and deployed; focus on `ExcludeAssets="runtime"` and the `CopyToRevitAddins` build target
+3. `App.cs` — what actually runs after Revit finds and loads the class named in `FullClassName`
 
 ## Element schema
 
