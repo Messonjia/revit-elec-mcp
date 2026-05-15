@@ -2,28 +2,30 @@ using Autodesk.Revit.UI;
 
 namespace RevitElecMcp;
 
-// Revit instantiates this class because FullClassName in RevitElecMcp.addin points here.
-// IExternalApplication requires exactly two methods: OnStartup and OnShutdown.
 public class App : IExternalApplication
 {
+    private WebSocketServer? _server;
+
     public Result OnStartup(UIControlledApplication application)
     {
-        // UIControlledApplication is a restricted view of Revit — you can subscribe
-        // to events and add ribbon buttons, but you cannot open documents here.
-        // Revit is still initializing when OnStartup runs.
+        // ExternalEvent.Create must be called on the UI thread (here in OnStartup is correct).
+        // The resulting ExternalEvent object is safe to call Raise() on from any thread.
+        var handler = new ElementQueryHandler();
+        var externalEvent = ExternalEvent.Create(handler);
 
-        // TaskDialog is Revit's native modal popup. Using it here confirms the DLL
-        // loaded and this method ran. Replace with logging before shipping.
-        TaskDialog.Show("RevitElecMcp", "Add-in loaded successfully.");
+        _server = new WebSocketServer(handler, externalEvent);
 
-        // Result.Succeeded tells Revit the startup completed without error.
-        // Returning Result.Failed causes Revit to unload the add-in and show a warning.
+        // Start the WebSocket listener on a background thread — if we awaited it here,
+        // OnStartup would block and Revit would hang on startup.
+        Task.Run(() => _server.StartAsync());
+
         return Result.Succeeded;
     }
 
     public Result OnShutdown(UIControlledApplication application)
     {
-        // Nothing to clean up yet — WebSocket server teardown comes in Step 7.4.
+        // Stop() cancels the listener loop and closes the HttpListener.
+        _server?.Stop();
         return Result.Succeeded;
     }
 }

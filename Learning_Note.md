@@ -684,3 +684,26 @@ What we're building
 
   App.OnShutdown()
     WebSocketServer.Stop()
+
+## Decisions and alternatives
+  Why these specific choices over alternatives
+
+  Choice: System.Net.HttpListener for WebSocket
+  Alternative skipped: Fleck, WebSocketSharp
+  Why: Built into .NET 8 — no NuGet dep, you can see every handshake step
+  ────────────────────────────────────────
+  Choice: System.Text.Json
+  Alternative skipped: Newtonsoft.Json
+  Why: Also built-in to .NET 8; Newtonsoft is legacy for new code
+  ────────────────────────────────────────
+  Choice: TCS as handoff
+  Alternative skipped: ManualResetEvent + shared string field
+  Why: TCS integrates naturally with async/await; the background thread suspends
+    cleanly without spin-waiting
+  ────────────────────────────────────────
+  Choice: One connection at a time
+  Alternative skipped: Multi-client server
+  Why: The MCP server is synchronous — over-engineering this adds state management
+    complexity with no benefit right now
+
+  ---

@@ -1,0 +1,13 @@
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\bin\Debug\net8.0-windows\RevitElecMcp.deps.json
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\bin\Debug\net8.0-windows\RevitElecMcp.dll
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\bin\Debug\net8.0-windows\RevitElecMcp.pdb
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.csproj.AssemblyReference.cache
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.GeneratedMSBuildEditorConfig.editorconfig
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.AssemblyInfoInputs.cache
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.AssemblyInfo.cs
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.csproj.CoreCompileInputs.cache
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.sourcelink.json
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.dll
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\refint\RevitElecMcp.dll
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\RevitElecMcp.pdb
+Q:\Revit_Elec_MCP\revit_addin\RevitElecMcp\obj\Debug\net8.0-windows\ref\RevitElecMcp.dll
