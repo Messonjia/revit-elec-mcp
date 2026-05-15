@@ -2,18 +2,18 @@
   "version": 3,
   "targets": {
     "net8.0-windows7.0": {
-      "Nice3point.Revit.Api.RevitAPI/2024.3.40": {
+      "Nice3point.Revit.Api.RevitAPI/2025.4.50": {
         "type": "package",
         "compile": {
-          "ref/net48/RevitAPI.dll": {
+          "ref/net8.0-windows7.0/RevitAPI.dll": {
             "related": ".xml"
           }
         }
       },
-      "Nice3point.Revit.Api.RevitAPIUI/2024.3.40": {
+      "Nice3point.Revit.Api.RevitAPIUI/2025.4.50": {
         "type": "package",
         "compile": {
-          "ref/net48/RevitAPIUI.dll": {
+          "ref/net8.0-windows7.0/RevitAPIUI.dll": {
             "related": ".xml"
           }
         }
@@ -21,43 +21,43 @@
     }
   },
   "libraries": {
-    "Nice3point.Revit.Api.RevitAPI/2024.3.40": {
-      "sha512": "tcHiGfthcFJxJyiUyQB+NUOAmLRjpUR+aVOo4E1QxbiqMtDaPrLVwSqrBCZBb9in2Hswr7cywnKR+wtMC7S/Ug==",
+    "Nice3point.Revit.Api.RevitAPI/2025.4.50": {
+      "sha512": "NeoGX1A4TTNAtykG5GVDg7aqKur1xZ1bIQZsl2UBsM+1IBF3/lFJy0YWMx29ndJXn6mZb3Ju6tOYBvS9VvUIbg==",
       "type": "package",
-      "path": "nice3point.revit.api.revitapi/2024.3.40",
+      "path": "nice3point.revit.api.revitapi/2025.4.50",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
         "License.md",
         "Readme.md",
         "images/PackageIcon.png",
-        "nice3point.revit.api.revitapi.2024.3.40.nupkg.sha512",
+        "nice3point.revit.api.revitapi.2025.4.50.nupkg.sha512",
         "nice3point.revit.api.revitapi.nuspec",
-        "ref/net48/RevitAPI.dll",
-        "ref/net48/RevitAPI.xml"
+        "ref/net8.0-windows7.0/RevitAPI.dll",
+        "ref/net8.0-windows7.0/RevitAPI.xml"
       ]
     },
-    "Nice3point.Revit.Api.RevitAPIUI/2024.3.40": {
-      "sha512": "r/70xyCQFNd0RUSj9zY0jtIK4JP1+nhlOA2P0md3g2w76uEodB/T9k3OyZ0PhjY3fFpo5zUtqN/ME+rdjaHrHA==",
+    "Nice3point.Revit.Api.RevitAPIUI/2025.4.50": {
+      "sha512": "FCogEBlvk78ezXP+CahzpopbjNnZctc/Y1ZJd4OPRghqFFiApZeX+8cQD+7tHFA+UhLKRJhl5rL8HT23dd6jOg==",
       "type": "package",
-      "path": "nice3point.revit.api.revitapiui/2024.3.40",
+      "path": "nice3point.revit.api.revitapiui/2025.4.50",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
         "License.md",
         "Readme.md",
         "images/PackageIcon.png",
-        "nice3point.revit.api.revitapiui.2024.3.40.nupkg.sha512",
+        "nice3point.revit.api.revitapiui.2025.4.50.nupkg.sha512",
         "nice3point.revit.api.revitapiui.nuspec",
-        "ref/net48/RevitAPIUI.dll",
-        "ref/net48/RevitAPIUI.xml"
+        "ref/net8.0-windows7.0/RevitAPIUI.dll",
+        "ref/net8.0-windows7.0/RevitAPIUI.xml"
       ]
     }
   },
   "projectFileDependencyGroups": {
     "net8.0-windows7.0": [
-      "Nice3point.Revit.Api.RevitAPI >= 2024.*",
-      "Nice3point.Revit.Api.RevitAPIUI >= 2024.*"
+      "Nice3point.Revit.Api.RevitAPI >= 2025.*",
+      "Nice3point.Revit.Api.RevitAPIUI >= 2025.*"
     ]
   },
   "packageFolders": {
@@ -113,12 +113,12 @@
           "Nice3point.Revit.Api.RevitAPI": {
             "include": "Compile, Build, Native, ContentFiles, Analyzers, BuildTransitive",
             "target": "Package",
-            "version": "[2024.*, )"
+            "version": "[2025.*, )"
           },
           "Nice3point.Revit.Api.RevitAPIUI": {
             "include": "Compile, Build, Native, ContentFiles, Analyzers, BuildTransitive",
             "target": "Package",
-            "version": "[2024.*, )"
+            "version": "[2025.*, )"
           }
         },
         "imports": [
@@ -154,27 +154,5 @@
         "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.102/PortableRuntimeIdentifierGraph.json"
       }
     }
-  },
-  "logs": [
-    {
-      "code": "NU1701",
-      "level": "Warning",
-      "warningLevel": 1,
-      "message": "Package 'Nice3point.Revit.Api.RevitAPI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
-      "libraryId": "Nice3point.Revit.Api.RevitAPI",
-      "targetGraphs": [
-        "net8.0-windows7.0"
-      ]
-    },
-    {
-      "code": "NU1701",
-      "level": "Warning",
-      "warningLevel": 1,
-      "message": "Package 'Nice3point.Revit.Api.RevitAPIUI 2024.3.40' was restored using '.NETFramework,Version=v4.6.1, .NETFramework,Version=v4.6.2, .NETFramework,Version=v4.7, .NETFramework,Version=v4.7.1, .NETFramework,Version=v4.7.2, .NETFramework,Version=v4.8, .NETFramework,Version=v4.8.1' instead of the project target framework 'net8.0-windows7.0'. This package may not be fully compatible with your project.",
-      "libraryId": "Nice3point.Revit.Api.RevitAPIUI",
-      "targetGraphs": [
-        "net8.0-windows7.0"
-      ]
-    }
-  ]
+  }
 }
