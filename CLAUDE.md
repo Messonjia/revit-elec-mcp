@@ -48,62 +48,57 @@ The post-build step automatically copies `RevitElecMcp.dll` and `RevitElecMcp.ad
   }
 }
 ```
-Then restart Claude Desktop. No automated tests exist yet — test tools manually by invoking them in a Claude Desktop chat session.
+Then restart Claude Desktop. No automated tests exist — test tools manually by invoking them in a Claude Desktop chat session.
 
 # Architecture
 
-## Current state (Phase 1 — MCP scaffold)
+## Current state (Phase 2 — full stack, Steps 1–7.5 complete)
 
 ```
 Claude Desktop
     ↓ JSON-RPC over stdio
 main.py  (FastMCP server, runs outside Revit)
-    ↓ (hardcoded FAKE_ELEMENTS for now)
-```
-
-`main.py` is the entire server. FastMCP introspects each `@mcp.tool()` decorated function automatically: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
-
-## Tool status
-
-| Tool | Description | Status |
-|---|---|---|
-| `ping` | Verify the MCP server is reachable | Done |
-| `query_elements` | Electrical elements filtered by voltage/ampere/location/classification | Fake data (Step 6) |
-| `query_elements` (real) | Same tool, live Revit data via C# add-in | Planned (Step 7) |
-
-## Planned state (Phase 2 — C# add-in bridge, Step 7)
-
-```
-Claude Desktop
-    ↓ JSON-RPC over stdio
-main.py
     ↓ WebSocket ws://localhost:8765
 C# Revit add-in (RevitElecMcp.dll, inside Revit's process)
     ↓ ExternalEvent → UI thread → FilteredElementCollector
 Live .rvt model
 ```
 
-**Planned C# file structure for Step 7.4:**
+`main.py` is the entire Python server. FastMCP introspects each `@mcp.tool()` decorated function: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
 
-- `App.cs` — creates handler and ExternalEvent at startup, starts WebSocketServer on background thread, stops it on shutdown
-- `ElementQueryHandler.cs` — implements `IExternalEventHandler`; the only place Revit API calls happen. Runs `FilteredElementCollector`, serializes to JSON, signals the awaiting background thread via `TaskCompletionSource`
-- `WebSocketServer.cs` — background listener on `localhost:8765`. On message: stores a `TaskCompletionSource` on the handler, calls `ExternalEvent.Raise()`, awaits the result, sends JSON reply
+## Tool status
 
-**Key constraints for Phase 2:**
+| Tool | Description | Status |
+|---|---|---|
+| `ping` | Verify the MCP server is reachable | Done |
+| `query_elements` | Returns electrical fixtures from live Revit model via WebSocket | Done |
 
-- Revit's API is only callable from its own process on the **UI thread**. The C# add-in uses `ExternalEvent` to marshal calls from the WebSocket background thread onto the UI thread. `main.py` cannot call Revit directly.
-- `ExternalEvent.Raise()` is non-blocking — it sets a flag. Revit calls `Execute()` on its own schedule (typically within milliseconds, unless Revit is in a modal dialog). If it returns `Denied`, the `TaskCompletionSource` will never complete — add a timeout guard.
-- The C# project targets `net8.0-windows` and references Revit 2025 API via NuGet (`Nice3point.Revit.Api.*`) with `ExcludeAssets="runtime"` — Revit loads its own API DLLs at runtime, don't bundle them.
-- The add-in manifest (`RevitElecMcp.addin`) declares `Type="Application"`, meaning it loads automatically when Revit starts (no user button required).
+## C# add-in file structure
 
-**Reading order for the addin files** (the order Revit itself processes them):
-1. `RevitElecMcp.addin` — only file Revit reads directly; everything else flows from it
-2. `RevitElecMcp.csproj` — how the DLL is built and deployed; focus on `ExcludeAssets="runtime"` and the `CopyToRevitAddins` build target
-3. `App.cs` — what actually runs after Revit finds and loads the class named in `FullClassName`
+Reading order (the order Revit itself processes them):
+1. `RevitElecMcp.addin` — the only file Revit reads directly. Declares `Type="Application"` (loads at Revit startup, no user button required) and points to the DLL and `FullClassName`.
+2. `RevitElecMcp.csproj` — controls build and deploy. Key details: targets `net8.0-windows`, references Revit 2025 API via `Nice3point.Revit.Api.*` with `ExcludeAssets="runtime"` (don't bundle Revit's own DLLs), and the `CopyToRevitAddins` post-build target copies both files to `%AppData%\Autodesk\Revit\Addins\2025\`.
+3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates the handler and `ExternalEvent` on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
+4. `ElementQueryHandler.cs` — implements `IExternalEventHandler`. The **only place Revit API calls happen**. `Execute()` runs on the UI thread: queries `FilteredElementCollector` for `OST_ElectricalFixtures`, serializes to JSON, signals the waiting background thread via `TaskCompletionSource<string>`.
+5. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. On message: stores a fresh `TaskCompletionSource` on the handler, calls `ExternalEvent.Raise()`, awaits the result (5-second timeout guard), sends JSON reply.
+
+## Threading model (the non-obvious part)
+
+Revit's API has no thread safety — it is only callable from Revit's own UI thread inside a "valid Revit API context." The WebSocket server runs on a background thread, so it cannot call the Revit API directly.
+
+**`ExternalEvent` is the handoff mechanism:**
+- Background thread stores a `TaskCompletionSource` on the handler, calls `Raise()` (non-blocking — sets a flag), then `await`s the task.
+- Revit polls the flag on the UI thread during idle time, calls `Execute()` in a valid context.
+- `Execute()` runs the Revit API call and calls `tcs.SetResult()`, unblocking the background thread.
+- Background thread sends the JSON response over WebSocket.
+
+`ExternalEvent.Raise()` returns an `ExternalEventRequest` enum:
+- `Accepted` / `Pending` — `Execute()` will fire; the 5-second timeout guards against unexpected hangs.
+- `Denied` — add-in isn't properly registered; `Execute()` will never fire. `WebSocketServer` detects this and sends an error response immediately rather than hanging.
 
 ## Element schema
 
-Each electrical element carries both element-level data (`voltage`, `ampere`, `load_classification`) and connection-level data (`panel`, `circuit_number`). `panel` and `circuit_number` are `None` for un-circuited elements — this is normal in AEC workflows where circuiting happens after placement.
+Currently `ElementQueryHandler.Execute()` returns `id` (long) and `name` (string) per element — only `OST_ElectricalFixtures` instances, not type definitions. Extending to richer fields (voltage, ampere, load classification, panel, circuit number) is a straight-line exercise once the threading model is proven working.
 
 ## Package manager
 
@@ -111,5 +106,5 @@ This project uses `uv` (not pip). Always use `uv add <package>` to add dependenc
 
 ## Reference documents
 
-- `Pre_Start.md` — step-by-step roadmap (Steps 1–7) with time estimates; Step 7 is the WebSocket + ExternalEvent bridge
-- `Learning_Note.md` — learning journal covering `uv`, MCP protocol mechanics, and the ExternalEvent threading model
+- `Pre_Start.md` — step-by-step roadmap (Steps 1–7) with time estimates and learning notes for each step
+- `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
