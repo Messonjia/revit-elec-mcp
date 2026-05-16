@@ -71,7 +71,10 @@ Live .rvt model
 | Tool | Description | Status |
 |---|---|---|
 | `ping` | Verify the MCP server is reachable | Done |
-| `query_elements` | Returns electrical fixtures from live Revit model via WebSocket | Done |
+| `query_elements` | Returns electrical fixtures from live Revit model via WebSocket | Done (id + name only) |
+| `query_elements` (enriched) | Add electrical parameters: voltage, load, panel, circuit, level | Step 8 |
+| `check_model_integrity` | Flag broken panel references, duplicate circuits, orphaned elements | Step 9 |
+| `check_code_compliance` | NEC 2023 compliance via RAG — query specific rules against model data | Step 10 |
 
 ## C# add-in file structure
 
@@ -98,7 +101,47 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 
 ## Element schema
 
-Currently `ElementQueryHandler.Execute()` returns `id` (long) and `name` (string) per element — only `OST_ElectricalFixtures` instances, not type definitions. Extending to richer fields (voltage, ampere, load classification, panel, circuit number) is a straight-line exercise once the threading model is proven working.
+Currently `ElementQueryHandler.Execute()` returns `id` (long) and `name` (string) per element — only `OST_ElectricalFixtures` instances, not type definitions.
+
+**Target schema for Step 8** (key `BuiltInParameter` names for reading each field):
+
+| Field | Source | BuiltInParameter |
+|---|---|---|
+| `id` | ElementId.Value | — |
+| `name` | Element.Name | — |
+| `level` | Level name | `LEVEL_PARAM` |
+| `voltage` | Electrical system voltage | `RBS_ELEC_VOLTAGE` |
+| `apparent_load` | Load in VA | `RBS_ELEC_APPARENT_LOAD` |
+| `load_classification` | Load type label | `RBS_ELEC_LOAD_CLASSIFICATION` |
+| `num_poles` | Number of poles | `RBS_ELEC_NUMBER_OF_POLES` |
+| `panel` | Connected panel name | `RBS_ELEC_CIRCUIT_PANEL_PARAM` |
+| `circuit_number` | Circuit number string | `RBS_ELEC_CIRCUIT_NUMBER` |
+| `phase` | 1 / 3 phase | `RBS_ELEC_CIRCUIT_PHASE_PARAM` |
+
+`panel` and `circuit_number` are `None` for un-circuited fixtures — normal in AEC workflows where circuiting happens after placement. The integrity checker (Step 9) flags fixtures where `panel` is set but that panel element doesn't exist in the model.
+
+## Planned features
+
+### Step 8 — Enrich element data
+Extend `ElementQueryHandler` to read the parameters above using `element.get_Parameter(BuiltInParameter.XXX)?.AsString()` (or `AsDouble()` for numeric). Also add `OST_ElectricalEquipment` (panels, switchboards, transformers) as a second category so we have both sides of a circuit for Step 9.
+
+### Step 9 — Model integrity checks (`check_model_integrity`)
+A new MCP tool that runs a set of deterministic checks against the data returned by the enriched query:
+
+- **Broken panel reference** — fixture's `panel` field names a panel that has no matching element in `OST_ElectricalEquipment`. This is the primary conflict class.
+- **Duplicate circuit** — two fixtures share the same `panel` + `circuit_number` but are not on the same `ElectricalSystem`.
+- **Overcapacity** — sum of `apparent_load` on a circuit exceeds the panel breaker rating.
+- **Un-circuited fixtures** — fixtures with `panel = None` (informational, not always a problem).
+
+All checks run in Python on the JSON payload returned from Revit — no new C# needed for most of them.
+
+### Step 10 — NEC 2023 code compliance (`check_code_compliance`) — RAG
+A retrieval-augmented tool that answers "does this model comply with NEC 2023 article X?" questions:
+
+- **Corpus**: NEC 2023 (PDF → chunked text → vector embeddings stored locally, e.g. ChromaDB)
+- **Flow**: user asks → retrieve relevant NEC sections → Claude reasons over those sections + live model data → cites specific article numbers in response
+- **Python stack**: `sentence-transformers` or OpenAI embeddings for indexing; `chromadb` for local vector store; retrieval integrated into the MCP tool handler in `main.py`
+- **Future options**: let user select NEC edition (2020, 2023), add ASHRAE 90.1 (energy), LEED electrical credits
 
 ## Package manager
 
