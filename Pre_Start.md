@@ -164,3 +164,326 @@ C# add-in, the add-in runs `FilteredElementCollector` on the UI thread via Exter
 and Claude gets back real element data from the live `.rvt` file.
 
 That's the full stack: Claude → Python → WebSocket → C# → Revit API → live model.
+
+---
+
+## Step 8 — Breaker sizing check (read-only)
+
+The goal: a new MCP tool `check_breaker_sizing(panel)` that returns every circuit
+connected to a named panel, with enough electrical data for Claude to reason about
+whether each breaker is correctly sized for its load.
+
+No writes yet. No agentic behaviour yet. Just getting the right data out of Revit.
+
+---
+
+### Step 8.1 — Read, don't build yet (alone, ~45 min)
+
+Three new concepts before any code.
+
+---
+
+**Concept 1 — ElectricalSystem: the circuit object**
+
+So far you've queried `OST_ElectricalFixtures` — physical devices (receptacles, lights).
+Circuits are different. In Revit's data model, a circuit is its own element type:
+`ElectricalSystem`. It lives in a different category: `OST_ElectricalCircuit`.
+
+`ElectricalSystem` is a subclass of `MEPSystem`, which is a subclass of `Element`.
+That means `FilteredElementCollector` can find it, but you query by a different category:
+
+```csharp
+new FilteredElementCollector(doc)
+    .OfCategory(BuiltInCategory.OST_ElectricalCircuit)
+    .WhereElementIsNotElementType()
+    .ToElements();
+```
+
+`ElectricalSystem` has first-class typed properties for the data you care about most:
+
+```csharp
+var sys = element as ElectricalSystem;
+sys.ApparentLoad     // double, in VA — the total load on this circuit
+sys.Voltage          // double, in volts
+sys.PolesNumber      // int, 1 or 3
+sys.CircuitNumber    // string, e.g. "3"
+sys.PanelName        // string, e.g. "P-1"
+```
+
+These are real C# properties, not parameter lookups. You call them like any property on
+any object. No `get_Parameter()` needed.
+
+The breaker rating is different — covered in Concept 2.
+
+---
+
+**Concept 2 — Properties vs. get_Parameter(): why the split exists**
+
+You'll notice that `ApparentLoad` and `Voltage` are typed C# properties on
+`ElectricalSystem`, but the breaker rating is not. You have to read it like this:
+
+```csharp
+var param = element.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_RATING_PARAM);
+double rating = param?.AsDouble() ?? 0;
+```
+
+Why the inconsistency? It's an API design decision Autodesk made over time.
+
+Revit's parameter system is a generic key-value store. Every element in a Revit model
+has a bag of parameters — some built-in (keyed by `BuiltInParameter` enum values),
+some user-defined. Early in Revit's history, *everything* was in that bag.
+
+Over time, Autodesk "promoted" the most fundamental, frequently-used data points for
+key element types to first-class typed properties. This makes them faster to call,
+easier to discover in autocomplete, and harder to misuse. `ApparentLoad` was promoted
+because every piece of electrical analysis code needs it. The breaker rating was not —
+it's more of a design/spec attribute that fewer callers need.
+
+The practical rule: **check the class docs first for a typed property. If there isn't
+one, fall back to `get_Parameter(BuiltInParameter.XXX)`.**
+
+The `BuiltInParameter` enum has thousands of entries, prefixed by system:
+- `RBS_` = Revit Building Systems (MEP — what you're working with)
+- `ROOM_` = room-related
+- `STRUCT_` = structural
+- etc.
+
+For electrical circuits, the parameters you'll use are all `RBS_ELEC_*`.
+
+---
+
+**Concept 3 — Casting in C#: `element as ElectricalSystem`**
+
+`FilteredElementCollector` always returns `IList<Element>` — the base type. The elements
+inside are actually `ElectricalSystem` objects, but the list doesn't know that. To get
+access to `ElectricalSystem`'s typed properties, you have to *cast*:
+
+```csharp
+var element = collector.First();       // type: Element
+var sys = element as ElectricalSystem; // type: ElectricalSystem (or null if wrong type)
+
+if (sys is null) continue; // safety check — skip if cast failed
+sys.ApparentLoad;          // now this compiles and works
+```
+
+The `as` keyword in C# is a *safe cast* — if the object is not actually an
+`ElectricalSystem`, it returns `null` instead of throwing an exception. Always null-check
+after `as`. Compare to a *hard cast* `(ElectricalSystem)element`, which throws if wrong.
+
+Use `as` + null check when you're not 100% certain about the type. Use a hard cast only
+when you are certain and want the exception as a bug signal.
+
+After reading, you should be able to answer:
+- What's the difference between `OST_ElectricalFixtures` and `OST_ElectricalCircuit`?
+- Why does `sys.ApparentLoad` work but breaker rating needs `get_Parameter()`?
+- What does `as` return if the cast fails?
+
+---
+
+### Step 8.2 — Build the circuit query (Claude Code, teaching mode, ~1.5 hours)
+
+Two things to build in one session:
+
+**Part A — `CircuitQueryHandler.cs`**
+A new `IExternalEventHandler` (same pattern as `ElementQueryHandler`) that:
+1. Reads a panel name from shared state
+2. Queries `OST_ElectricalCircuit` with `FilteredElementCollector`
+3. Casts each to `ElectricalSystem`
+4. Filters by `sys.PanelName == requestedPanel`
+5. Reads `ApparentLoad`, `Voltage`, `PolesNumber`, `CircuitNumber`, and breaker rating via `get_Parameter`
+6. Serializes to JSON and signals the `TaskCompletionSource`
+
+**Part B — Command routing in `WebSocketServer.cs`**
+Right now `WebSocketServer` ignores the message payload entirely and always queries
+fixtures. That needs to become a dispatcher: read the `command` field from the JSON,
+route to the right handler and `ExternalEvent`.
+
+The shape of the routing:
+
+```
+receive {"command": "get_circuits", "panel": "P-1"}
+  → deserialize
+  → if command == "get_circuits" → raise circuitEvent
+  → if command == "get_elements" → raise elementEvent  (existing)
+```
+
+`App.cs` will need to create both handlers and both `ExternalEvent` objects at startup,
+and pass both to `WebSocketServer`.
+
+**Part C — `check_breaker_sizing` tool in `main.py`**
+A new MCP tool that accepts a `panel` string, sends
+`{"command": "get_circuits", "panel": panel}` over WebSocket, and returns the JSON.
+Claude will do the breaker sizing math and NEC reasoning on the returned data — the tool
+itself is just a data fetch.
+
+Start your session with:
+
+> Before writing any code, explain how I should refactor WebSocketServer to route
+> different commands to different ExternalEvent handlers. What's the cleanest pattern,
+> and what are the tradeoffs? Don't write code yet.
+
+**You'll know it worked when:** you ask Claude Desktop "check breaker sizing on panel P-1"
+and get back a JSON list of circuits with load, voltage, poles, and breaker rating — and
+Claude tells you which ones are incorrectly sized.
+
+---
+
+### Step 8.3 — Verify the reasoning (alone, ~20 min)
+
+Pick one circuit from the returned data. Manually calculate:
+
+```
+load_amps = ApparentLoad / Voltage        (single phase)
+required  = load_amps × 1.25             (NEC 210.20(A) — continuous load rule)
+correct_breaker = next standard size ≥ required
+```
+
+Standard sizes: 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100...
+
+Check that Claude's reasoning matches your manual calc. If it doesn't, the issue is
+either in the data (wrong parameter read) or in the prompt (tool description is misleading
+the model). Both are worth understanding before adding write capability.
+
+---
+
+## Step 9 — Agentic breaker fix (write operation)
+
+The goal: when Claude identifies an incorrectly sized breaker, a second MCP tool
+`fix_breaker_size(circuit_id, new_rating)` lets Claude propose a fix and — after you
+confirm — write it back to the live Revit model.
+
+This is the first time we write to Revit. Writing introduces new constraints.
+
+---
+
+### Step 9.1 — Read, don't build yet (alone, ~30 min)
+
+One new concept: **Transaction**.
+
+---
+
+**Concept — Transaction: Revit's write lock**
+
+Every modification to a Revit model — setting a parameter, creating an element, deleting
+one — must happen inside a `Transaction`. Revit enforces this strictly. Writing outside
+a transaction throws `InvalidOperationException` immediately.
+
+A transaction is Revit's version of a database transaction. The pattern:
+
+```csharp
+using var tx = new Transaction(doc, "Fix breaker size");
+tx.Start();
+try
+{
+    // ... make your changes here ...
+    tx.Commit();
+}
+catch
+{
+    tx.RollBack(); // undo everything if anything went wrong
+    throw;
+}
+```
+
+The string `"Fix breaker size"` is the name that appears in Revit's undo history
+(Edit → Undo → "Fix breaker size"). Choose it to be meaningful — the user will see it
+when they Ctrl+Z.
+
+Three possible outcomes of a transaction:
+- **Commit** — changes are saved to the model. The user can undo with Ctrl+Z.
+- **RollBack** — all changes since `Start()` are discarded. Model unchanged.
+- **Abandon** (if you forget to Commit/RollBack and the object is disposed) — same as
+  RollBack. Revit is defensive here.
+
+**Why transactions must also happen on the UI thread**
+
+Transactions call the Revit API. All Revit API calls must be on the UI thread. So your
+`BreakerFixHandler.Execute()` — which already runs on the UI thread via `ExternalEvent`
+— is exactly the right place to open a transaction.
+
+The threading model doesn't change. The only thing that changes is that inside
+`Execute()`, your code goes from read-only to read-write.
+
+After reading, you should be able to answer:
+- What happens if you forget to call `tx.Commit()` or `tx.RollBack()`?
+- Why does the transaction also have to be on the UI thread?
+- Where does the transaction name appear in Revit?
+
+---
+
+### Step 9.2 — Build the write handler (Claude Code, teaching mode, ~1 hour)
+
+Two things in one session:
+
+**Part A — `BreakerFixHandler.cs`**
+A new `IExternalEventHandler` that:
+1. Reads `circuit_id` (long) and `new_rating` (double) from shared state
+2. Finds the element: `doc.GetElement(new ElementId(circuit_id))`
+3. Opens a `Transaction`
+4. Sets `RBS_ELEC_CIRCUIT_RATING_PARAM` to `new_rating` via `element.get_Parameter(...).Set(...)`
+5. Commits (or rolls back on error)
+6. Signals `TaskCompletionSource` with a success/error JSON
+
+**Part B — `fix_breaker_size` tool in `main.py`**
+A new MCP tool that accepts `circuit_id: int` and `new_rating: int`, sends
+`{"command": "fix_breaker", "circuit_id": ..., "new_rating": ...}` over WebSocket.
+
+The tool description (the docstring Claude reads) should be explicit that this writes
+to the model and is not reversible via this tool — only via Revit's undo.
+
+Start your session with:
+
+> Before writing any code, explain how Transaction works in a C# Revit add-in —
+> specifically Start, Commit, and RollBack. Where does it have to live relative to our
+> ExternalEvent handler? Don't write code yet.
+
+**You'll know it worked when:** you send a raw WebSocket message with
+`{"command": "fix_breaker", "circuit_id": <id>, "new_rating": 40}` and the breaker
+rating updates in the live Revit model.
+
+---
+
+### Step 9.3 — Wire the agentic loop (Claude Code, ~30 min)
+
+Now both tools exist. This step is about making sure the *interaction design* is right —
+not new code, just the tool descriptions and how Claude uses them together.
+
+The correct flow:
+
+```
+User: "Check breaker sizing on P-1 and fix anything wrong"
+
+1. Claude calls check_breaker_sizing(panel="P-1")
+2. Claude reasons over the data — identifies circuit 3 as undersized
+3. Claude explains the problem and proposes the fix — does NOT call fix_breaker_size yet
+4. User confirms: "yes, fix it"
+5. Claude calls fix_breaker_size(circuit_id=5544, new_rating=40)
+6. Claude confirms the fix was applied
+```
+
+Step 3 is the key one. Claude must propose before acting. This is controlled by the
+tool description — the docstring of `fix_breaker_size` should make clear that this tool
+modifies the model and should only be called after user confirmation.
+
+Test the full loop in Claude Desktop. Verify that Claude never calls `fix_breaker_size`
+without first stating what it intends to do and waiting for your response.
+
+**You'll know it worked when:** a broken breaker size in your live model gets corrected
+through a natural language conversation, and you can Ctrl+Z in Revit to verify the
+change was really written.
+
+---
+
+## What success looks like (Steps 8–9)
+
+You type in Claude Desktop:
+> "Check all breakers on panel P-1. Fix anything that's wrong."
+
+Claude calls `check_breaker_sizing("P-1")`, reasons about the data using NEC 210.20(A),
+identifies circuit 3 as undersized (30A load, 20A breaker, needs 40A), tells you what
+it found, asks for confirmation, and — after you say yes — calls `fix_breaker_size` to
+update the model.
+
+You open Revit, check circuit 3 on P-1, and see the breaker is now 40A.
+Ctrl+Z in Revit undoes the change. That's the full agentic loop: read → reason →
+propose → confirm → write → verifiable in the model.
