@@ -275,9 +275,27 @@ when you are certain and want the exception as a bug signal.
 
 After reading, you should be able to answer:
 - What's the difference between `OST_ElectricalFixtures` and `OST_ElectricalCircuit`?
+  You got "different element types" right. The deeper answer is what kind of thing
+  each represents: OST_ElectricalFixtures are physical devices placed in the model  (a receptacle on a wall, a light fixture on a ceiling). OST_ElectricalCircuit
+  elements are logical connections — the circuit itself, linking a group of
+  fixtures to a panel. You can have a fixture with no circuit (un-circuited), or a
+  circuit with no fixtures (empty circuit). They model different real-world
+  concepts, which is why they're separate categories.
 - Why does `sys.ApparentLoad` work but breaker rating needs `get_Parameter()`?
-- What does `as` return if the cast fails?
+  Your instinct — "almost everyone uses it so it got promoted" — is in the right
+  direction, but two corrections:
 
+  - ApparentLoad is a property of ElectricalSystem (the circuit), not of the
+  fixture. It's the total load of everything connected to that circuit.
+  - The breaker rating is also on ElectricalSystem, not optional or missing — it's
+  on every circuit. The difference isn't presence/absence, it's how Autodesk stored   it internally. ApparentLoad was given a typed C# property because it's
+  computed/fundamental to the circuit object. The breaker rating was stored in the
+  generic parameter bag and never promoted to a first-class property — a historical   API decision, not a design rule about fixtures.
+
+  Both are always there. You just reach them differently.
+- What does `as` return if the cast fails?
+  Exactly right. as returns null on failure. That's the whole reason you always
+  null-check after it.
 ---
 
 ### Step 8.2 — Build the circuit query (Claude Code, teaching mode, ~1.5 hours)
