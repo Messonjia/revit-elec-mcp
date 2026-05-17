@@ -12,17 +12,22 @@ public class WebSocketServer
     private readonly ExternalEvent _elementEvent;
     private readonly CircuitQueryHandler _circuitHandler;
     private readonly ExternalEvent _circuitEvent;
+    private readonly PanelQueryHandler _panelHandler;
+    private readonly ExternalEvent _panelEvent;
     private readonly HttpListener _listener;
     private CancellationTokenSource? _cts;
 
     public WebSocketServer(
         ElementQueryHandler elementHandler, ExternalEvent elementEvent,
-        CircuitQueryHandler circuitHandler,  ExternalEvent circuitEvent)
+        CircuitQueryHandler circuitHandler,  ExternalEvent circuitEvent,
+        PanelQueryHandler panelHandler,      ExternalEvent panelEvent)
     {
         _elementHandler = elementHandler;
         _elementEvent   = elementEvent;
         _circuitHandler = circuitHandler;
         _circuitEvent   = circuitEvent;
+        _panelHandler   = panelHandler;
+        _panelEvent     = panelEvent;
 
         // HttpListener is .NET's built-in HTTP/WebSocket server — no NuGet needed.
         // The trailing slash is required by HttpListener; omitting it throws at Start().
@@ -86,6 +91,7 @@ public class WebSocketServer
                 "get_elements" => await HandleGetElementsAsync(),
                 "get_circuits" => await HandleGetCircuitsAsync(
                     doc.RootElement.GetProperty("panel").GetString()),
+                "list_panels"  => await HandleGetPanelsAsync(),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown command: {command}" })
             };
         }
@@ -112,6 +118,13 @@ public class WebSocketServer
         _circuitHandler.PanelName = panelName;
         _circuitHandler.Tcs       = tcs;
         return await RaiseAndWaitAsync(_circuitEvent, tcs);
+    }
+
+    private async Task<string> HandleGetPanelsAsync()
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _panelHandler.Tcs = tcs;
+        return await RaiseAndWaitAsync(_panelEvent, tcs);
     }
 
     // Every handler follows the same raise → check denied → await with timeout pattern.

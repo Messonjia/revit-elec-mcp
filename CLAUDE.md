@@ -170,3 +170,4 @@ This project uses `uv` (not pip). Always use `uv add <package>` to add dependenc
 
 - `Pre_Start.md` — step-by-step roadmap (Steps 1–9) with concept explanations and learning notes
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
+- `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)

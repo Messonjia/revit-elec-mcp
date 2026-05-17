@@ -42,22 +42,35 @@ public class CircuitQueryHandler : IExternalEventHandler
                 .Where(sys => sys is not null)
                 // If PanelName was provided, filter to only that panel. Null means return all.
                 .Where(sys => PanelName is null || sys!.PanelName == PanelName)
-                .Select(sys => new
+                .Select(sys =>
                 {
-                    id             = sys!.Id.Value,
-                    circuit_number = sys.CircuitNumber,  // e.g. "3" — string, not int
-                    panel          = sys.PanelName,
-                    // ApparentLoad and Voltage are first-class typed properties on ElectricalSystem.
-                    // Revit stores them in internal units: VA for load, volts for voltage.
-                    apparent_load_va  = sys.ApparentLoad,
-                    voltage           = sys.Voltage,
-                    poles             = sys.PolesNumber,
-                    // These two are not promoted to typed properties — access via parameter bag.
-                    // AsDouble/AsString return 0/null if the parameter exists but has no value set.
-                    breaker_rating      = sys.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_RATING_PARAM)
-                                           ?.AsDouble() ?? 0,
-                    load_classification = sys.get_Parameter(BuiltInParameter.RBS_ELEC_LOAD_CLASSIFICATION)
-                                           ?.AsString() ?? "Unknown"
+                    // ApparentLoad and Voltage are in Revit internal units — must convert before returning.
+                    double loadVA = UnitUtils.ConvertFromInternalUnits(sys!.ApparentLoad, UnitTypeId.VoltAmperes);
+                    double volts  = UnitUtils.ConvertFromInternalUnits(sys.Voltage, UnitTypeId.Volts);
+
+                    // RBS_ELEC_LOAD_CLASSIFICATION is stored as an ElementId reference to a
+                    // LoadClassification element, not a plain string — AsString() always returns null.
+                    var lcParam   = sys.get_Parameter(BuiltInParameter.RBS_ELEC_LOAD_CLASSIFICATION);
+                    string lcName = "Unknown";
+                    if (lcParam?.StorageType == StorageType.ElementId)
+                        lcName = doc.GetElement(lcParam.AsElementId())?.Name ?? "Unknown";
+                    else if (lcParam?.StorageType == StorageType.String)
+                        lcName = lcParam.AsString() ?? "Unknown";
+
+                    return new
+                    {
+                        id                  = sys.Id.Value,
+                        circuit_number      = sys.CircuitNumber,  // string, e.g. "3"
+                        panel               = sys.PanelName,
+                        apparent_load_va    = loadVA,
+                        voltage             = volts,
+                        poles               = sys.PolesNumber,
+                        // A circuit with no connected elements is a spare — skip NEC sizing.
+                        is_spare            = sys.Elements.Size == 0,
+                        breaker_rating      = sys.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_RATING_PARAM)
+                                               ?.AsDouble() ?? 0,
+                        load_classification = lcName
+                    };
                 });
 
             Tcs.SetResult(JsonSerializer.Serialize(circuits));

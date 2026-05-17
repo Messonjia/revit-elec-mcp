@@ -66,5 +66,14 @@ async def check_breaker_sizing(panel: str) -> str:
     return await _send({"command": "get_circuits", "panel": panel})
 
 
+@mcp.tool()
+async def list_panels() -> str:
+    """Return all electrical panels (distribution equipment) in the live Revit model.
+    Each entry has an 'id' (integer) and 'name' (string).
+    Call this before check_breaker_sizing to discover panel names.
+    Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
+    return await _send({"command": "list_panels"})
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
