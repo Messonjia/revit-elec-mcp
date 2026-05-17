@@ -754,3 +754,49 @@ What we're building
 
   The mental model: Raise() is a question, not a command. Accepted = "I'll do it
   now." Pending = "I'll do it when I'm free." Denied = "I don't know who you are."
+
+  Clean build. Here's what was written and why:
+
+  CircuitQueryHandler.cs─(new)─────────────────────────────────────────────────────  - Same IExternalEventHandler pattern as ElementQueryHandler — no new concepts
+  here  - Queries OST_ElectricalCircuit, casts each to ElectricalSystem with as + null
+  filter  - PanelName = null means return all circuits; set it to filter to one panel
+  - The using Autodesk.Revit.DB.Electrical was the one thing I got wrong initially
+  — ElectricalSystem lives in that sub-namespace, not the parent Autodesk.Revit.DB
+
+  WebSocketServer.cs (rewritten)
+  - Two changes worth noting: the received.Count fix (previously the whole
+  4096-byte buffer was passed to GetString, including trailing zeros — now we pass
+  only the actual bytes received), and RaiseAndWaitAsync extracted as a shared
+  helper so the Denied/timeout logic doesn't repeat in every command arm
+
+  App.cs — creates both handlers + events at startup, passes both to
+  WebSocketServer
+
+  main.py — _send() helper extracted so both tools share the connect/send/recv
+  pattern rather than duplicating it; the check_breaker_sizing docstring includes
+  the NEC 210.20(A) formula because that's what Claude reads when deciding how to
+  reason about the data
+
+  Question you should be able to answer: HandleConnectionAsync has a try/catch
+  around the routing block, and each handler's Execute() also has its own
+  try/catch. Why do we need both — what does each one catch that the other can't?
+  Two different failure locations, two different catchers.
+
+  HandleConnectionAsync try/catch catches failures that happen before Revit is ever   involved — malformed JSON from Python, a missing "command" property, a missing
+  "panel" property. At that point we're still on the background thread, no  ExternalEvent has been raised, and Revit hasn't been touched. If we didn't catch
+  here, the exception would bubble up and crash the WebSocket loop.
+
+  Execute() try/catch catches failures that happen inside Revit — the document is
+  in a bad state, the FilteredElementCollector throws, a parameter read fails. At
+  that point we're on the UI thread, and there's no way for an exception to travel
+  back to the background thread naturally. If Execute() throws uncaught, Revit
+  itself absorbs it silently — and the TaskCompletionSource never gets SetResult()
+  called, so the background thread hangs until the 5-second timeout fires and
+  returns a generic "timed out" error instead of the real error message.
+
+  The Execute() catch exists to convert Revit-side exceptions into a JSON error
+  string that can actually reach the caller.
+
+  The short version: one catch is for bad input before Revit, the other is for
+  Revit failures that would otherwise disappear silently.
+---

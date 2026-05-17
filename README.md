@@ -8,8 +8,8 @@ language — Claude queries the model and reasons over the results.
 
 A bridge between Claude Desktop and Autodesk Revit, built in two layers:
 
-1. **MCP server** (`mcp_server/main.py`) — a Python process that exposes Revit data as tools
-   Claude can call. Runs locally, communicates with Claude Desktop over stdio.
+1. **MCP server** (`main.py`) — a Python process that exposes Revit data as tools Claude can
+   call. Runs locally, communicates with Claude Desktop over stdio.
 
 2. **Revit add-in** (`revit_addin/`) — a C# add-in that loads into Revit at startup, exposes
    a WebSocket server on localhost, and executes Revit API calls on the UI thread via
@@ -21,11 +21,11 @@ A bridge between Claude Desktop and Autodesk Revit, built in two layers:
 Claude Desktop
     │  JSON-RPC over stdio
     ▼
-mcp_server/main.py  (Python, runs outside Revit)
-    │  WebSocket  →  localhost:8765
+main.py  (Python, runs outside Revit)
+    │  WebSocket  →  ws://localhost:8765
     ▼
 revit_addin/  (C# IExternalApplication, loaded by Revit at startup)
-    │  Revit API
+    │  ExternalEvent → UI thread → Revit API
     ▼
 Live .rvt model
 ```
@@ -39,14 +39,16 @@ which is Revit's sanctioned way to post work back to the UI thread.
 | Tool | Description | Status |
 |---|---|---|
 | `ping` | Verify the MCP server is reachable | Done |
-| `query_elements` | Return all electrical elements from the live model | Fake data (Step 6) |
-| `query_elements` (real) | Same tool, live Revit data via C# add-in | Planned (Step 7) |
+| `query_elements` | Return all electrical fixtures from the live model | Done |
+| `check_breaker_sizing` | Return circuits on a panel with load + breaker data; Claude checks NEC 210.20(A) sizing | Done |
+| `fix_breaker_size` | Write a corrected breaker rating back to Revit (agentic, confirms before writing) | Step 9 |
 
 ## Current state
 
-- MCP server scaffolded with `ping` and `query_elements` (hardcoded fake data)
-- Wired into Claude Desktop and confirmed working end-to-end
-- C# add-in not yet built — `query_elements` returns fake elements until Step 7
+- Full read stack working end-to-end: Claude Desktop → MCP server → WebSocket → C# add-in → live Revit model
+- `check_breaker_sizing` returns circuit load, voltage, poles, breaker rating, and load classification per circuit
+- Motor/HVAC loads reported as "manual review required" — NEC 430/440 rules not yet implemented
+- Write capability (Step 9) not yet built — agentic breaker fix coming next
 
 ## Stack
 
@@ -59,27 +61,25 @@ which is Revit's sanctioned way to post work back to the UI thread.
 
 ## Setup
 
-**Python MCP server:**
+**Python MCP server (one-time):**
 ```powershell
-cd mcp_server
 uv sync
-.venv\Scripts\python.exe main.py   # blocks, waiting for MCP client
 ```
 
 **C# Revit add-in:**
 ```powershell
-cd revit_addin
-dotnet build                        # builds and copies .dll + .addin to Revit's addins folder
-# then restart Revit
+dotnet build revit_addin\RevitElecMcp\RevitElecMcp.csproj
+# Post-build step copies .dll + .addin to %AppData%\Autodesk\Revit\Addins\2025\
+# Restart Revit after each build
 ```
 
-**Claude Desktop** — add to `claude_desktop_config.json`:
+**Claude Desktop** — add to `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "revit-elec-mcp": {
-      "command": "<absolute-path>\\mcp_server\\.venv\\Scripts\\python.exe",
-      "args": ["<absolute-path>\\mcp_server\\main.py"]
+      "command": "<absolute-path>\\.venv\\Scripts\\python.exe",
+      "args": ["<absolute-path>\\main.py"]
     }
   }
 }
@@ -88,5 +88,5 @@ dotnet build                        # builds and copies .dll + .addin to Revit's
 ## Project goal
 
 Build a practical AI tool for AEC electrical workflows — panel schedule auditing, circuit
-load analysis, coordination checks — while learning MCP, the Revit API, and how to design
-tool interfaces that an LLM can actually use well.
+load analysis, NEC code compliance checks — while learning MCP, the Revit API, and how to
+design tool interfaces that an LLM can actually use well.

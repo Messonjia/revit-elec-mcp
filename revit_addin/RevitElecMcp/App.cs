@@ -10,10 +10,13 @@ public class App : IExternalApplication
     {
         // ExternalEvent.Create must be called on the UI thread (here in OnStartup is correct).
         // The resulting ExternalEvent object is safe to call Raise() on from any thread.
-        var handler = new ElementQueryHandler();
-        var externalEvent = ExternalEvent.Create(handler);
+        var elementHandler = new ElementQueryHandler();
+        var elementEvent   = ExternalEvent.Create(elementHandler);
 
-        _server = new WebSocketServer(handler, externalEvent);
+        var circuitHandler = new CircuitQueryHandler();
+        var circuitEvent   = ExternalEvent.Create(circuitHandler);
+
+        _server = new WebSocketServer(elementHandler, elementEvent, circuitHandler, circuitEvent);
 
         // Start the WebSocket listener on a background thread — if we awaited it here,
         // OnStartup would block and Revit would hang on startup.

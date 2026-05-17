@@ -8,15 +8,21 @@ namespace RevitElecMcp;
 
 public class WebSocketServer
 {
-    private readonly ElementQueryHandler _handler;
-    private readonly ExternalEvent _externalEvent;
+    private readonly ElementQueryHandler _elementHandler;
+    private readonly ExternalEvent _elementEvent;
+    private readonly CircuitQueryHandler _circuitHandler;
+    private readonly ExternalEvent _circuitEvent;
     private readonly HttpListener _listener;
     private CancellationTokenSource? _cts;
 
-    public WebSocketServer(ElementQueryHandler handler, ExternalEvent externalEvent)
+    public WebSocketServer(
+        ElementQueryHandler elementHandler, ExternalEvent elementEvent,
+        CircuitQueryHandler circuitHandler,  ExternalEvent circuitEvent)
     {
-        _handler = handler;
-        _externalEvent = externalEvent;
+        _elementHandler = elementHandler;
+        _elementEvent   = elementEvent;
+        _circuitHandler = circuitHandler;
+        _circuitEvent   = circuitEvent;
 
         // HttpListener is .NET's built-in HTTP/WebSocket server — no NuGet needed.
         // The trailing slash is required by HttpListener; omitting it throws at Start().
@@ -59,37 +65,68 @@ public class WebSocketServer
 
     private async Task HandleConnectionAsync(WebSocket ws)
     {
-        // Receive the incoming message. We don't inspect the payload yet —
-        // every request returns all electrical fixtures from the active document.
-        var buffer = new byte[4096];
-        await ws.ReceiveAsync(buffer, CancellationToken.None);
+        var buffer   = new byte[4096];
+        // ReceiveAsync returns a result object — Count tells us how many bytes actually arrived.
+        // Previously we ignored this and passed the whole buffer to handlers, which included
+        // trailing zero bytes. GetString with the correct count fixes that.
+        var received = await ws.ReceiveAsync(buffer, CancellationToken.None);
+        var message  = Encoding.UTF8.GetString(buffer, 0, received.Count);
 
-        // Create the TCS before Raise() so Execute() always finds it set.
-        var tcs = new TaskCompletionSource<string>();
-        _handler.Tcs = tcs;
-
-        // Raise() is non-blocking. It sets a flag; Revit calls Execute() on the UI
-        // thread at its next idle opportunity — typically within milliseconds.
-        var status = _externalEvent.Raise();
-        if (status == ExternalEventRequest.Denied)
+        string json;
+        try
         {
-            // Denied means the add-in isn't properly registered with Revit.
-            // Execute() will never fire, so the TCS will never complete — send an
-            // error reply now instead of hanging the socket forever.
-            await SendAsync(ws, JsonSerializer.Serialize(new { error = "ExternalEvent denied — is the add-in loaded?" }));
-            await ws.CloseAsync(WebSocketCloseStatus.InternalServerError, "denied", CancellationToken.None);
-            return;
-        }
+            using var doc = JsonDocument.Parse(message);
+            var command = doc.RootElement.GetProperty("command").GetString();
 
-        // Await the TCS, with a 5-second timeout in case something goes sideways
-        // (e.g. Revit was in a modal dialog and never fired Execute).
-        var winner = await Task.WhenAny(tcs.Task, Task.Delay(5000));
-        var json = winner == tcs.Task
-            ? tcs.Task.Result
-            : JsonSerializer.Serialize(new { error = "Timed out waiting for Revit — was a document open?" });
+            // Option A routing: switch on command string.
+            // Each arm calls a private method that sets handler state, raises the event,
+            // and awaits the result. The shared raise+wait logic lives in RaiseAndWaitAsync.
+            json = command switch
+            {
+                "get_elements" => await HandleGetElementsAsync(),
+                "get_circuits" => await HandleGetCircuitsAsync(
+                    doc.RootElement.GetProperty("panel").GetString()),
+                _ => JsonSerializer.Serialize(new { error = $"Unknown command: {command}" })
+            };
+        }
+        catch (Exception ex)
+        {
+            // Catches malformed JSON, missing "command" property, or unknown property access.
+            json = JsonSerializer.Serialize(new { error = $"Bad request: {ex.Message}" });
+        }
 
         await SendAsync(ws, json);
         await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
+    }
+
+    private async Task<string> HandleGetElementsAsync()
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _elementHandler.Tcs = tcs;
+        return await RaiseAndWaitAsync(_elementEvent, tcs);
+    }
+
+    private async Task<string> HandleGetCircuitsAsync(string? panelName)
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _circuitHandler.PanelName = panelName;
+        _circuitHandler.Tcs       = tcs;
+        return await RaiseAndWaitAsync(_circuitEvent, tcs);
+    }
+
+    // Every handler follows the same raise → check denied → await with timeout pattern.
+    // Extracting it here means adding a new command only requires a new Handle*Async method,
+    // not duplicating this boilerplate.
+    private static async Task<string> RaiseAndWaitAsync(ExternalEvent evt, TaskCompletionSource<string> tcs)
+    {
+        var status = evt.Raise();
+        if (status == ExternalEventRequest.Denied)
+            return JsonSerializer.Serialize(new { error = "ExternalEvent denied — is the add-in loaded?" });
+
+        var winner = await Task.WhenAny(tcs.Task, Task.Delay(5000));
+        return winner == tcs.Task
+            ? tcs.Task.Result
+            : JsonSerializer.Serialize(new { error = "Timed out waiting for Revit — was a document open?" });
     }
 
     private static async Task SendAsync(WebSocket ws, string message)

@@ -52,7 +52,7 @@ Then restart Claude Desktop. No automated tests exist — test tools manually by
 
 # Architecture
 
-## Current state (Phase 2 — full stack, Steps 1–7.5 complete)
+## Current state (Steps 1–8 complete)
 
 ```
 Claude Desktop
@@ -60,88 +60,91 @@ Claude Desktop
 main.py  (FastMCP server, runs outside Revit)
     ↓ WebSocket ws://localhost:8765
 C# Revit add-in (RevitElecMcp.dll, inside Revit's process)
-    ↓ ExternalEvent → UI thread → FilteredElementCollector
+    ↓ ExternalEvent → UI thread → FilteredElementCollector / ElectricalSystem
 Live .rvt model
 ```
 
 `main.py` is the entire Python server. FastMCP introspects each `@mcp.tool()` decorated function: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
+
+`_send(payload)` is a shared async helper in `main.py` — all tools use it to connect, send, and receive over WebSocket rather than duplicating that logic.
 
 ## Tool status
 
 | Tool | Description | Status |
 |---|---|---|
 | `ping` | Verify the MCP server is reachable | Done |
-| `query_elements` | Returns electrical fixtures from live Revit model via WebSocket | Done (id + name only) |
-| `query_elements` (enriched) | Add electrical parameters: voltage, load, panel, circuit, level | Step 8 |
-| `check_model_integrity` | Flag broken panel references, duplicate circuits, orphaned elements | Step 9 |
-| `check_code_compliance` | NEC 2023 compliance via RAG — query specific rules against model data | Step 10 |
+| `query_elements` | Returns electrical fixtures (id + name) from live Revit model | Done |
+| `check_breaker_sizing(panel)` | Returns circuits on a panel with load + breaker data; Claude applies NEC 210.20(A) | Done (Step 8) |
+| `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Step 9 |
+| `check_code_compliance` | NEC 2023 compliance via RAG | Step 10 |
 
 ## C# add-in file structure
 
 Reading order (the order Revit itself processes them):
 1. `RevitElecMcp.addin` — the only file Revit reads directly. Declares `Type="Application"` (loads at Revit startup, no user button required) and points to the DLL and `FullClassName`.
 2. `RevitElecMcp.csproj` — controls build and deploy. Key details: targets `net8.0-windows`, references Revit 2025 API via `Nice3point.Revit.Api.*` with `ExcludeAssets="runtime"` (don't bundle Revit's own DLLs), and the `CopyToRevitAddins` post-build target copies both files to `%AppData%\Autodesk\Revit\Addins\2025\`.
-3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates the handler and `ExternalEvent` on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
-4. `ElementQueryHandler.cs` — implements `IExternalEventHandler`. The **only place Revit API calls happen**. `Execute()` runs on the UI thread: queries `FilteredElementCollector` for `OST_ElectricalFixtures`, serializes to JSON, signals the waiting background thread via `TaskCompletionSource<string>`.
-5. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. On message: stores a fresh `TaskCompletionSource` on the handler, calls `ExternalEvent.Raise()`, awaits the result (5-second timeout guard), sends JSON reply.
+3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates all handlers and `ExternalEvent` objects on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
+4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures`, returns `id` + `name` per fixture.
+5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing.
+6. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it.
 
 ## Threading model (the non-obvious part)
 
 Revit's API has no thread safety — it is only callable from Revit's own UI thread inside a "valid Revit API context." The WebSocket server runs on a background thread, so it cannot call the Revit API directly.
 
 **`ExternalEvent` is the handoff mechanism:**
-- Background thread stores a `TaskCompletionSource` on the handler, calls `Raise()` (non-blocking — sets a flag), then `await`s the task.
+- Background thread sets handler shared state (e.g. `PanelName`), creates a `TaskCompletionSource`, calls `Raise()` (non-blocking — sets a flag), then `await`s the task.
 - Revit polls the flag on the UI thread during idle time, calls `Execute()` in a valid context.
 - `Execute()` runs the Revit API call and calls `tcs.SetResult()`, unblocking the background thread.
 - Background thread sends the JSON response over WebSocket.
 
 `ExternalEvent.Raise()` returns an `ExternalEventRequest` enum:
-- `Accepted` / `Pending` — `Execute()` will fire; the 5-second timeout guards against unexpected hangs.
-- `Denied` — add-in isn't properly registered; `Execute()` will never fire. `WebSocketServer` detects this and sends an error response immediately rather than hanging.
+- `Accepted` / `Pending` — `Execute()` will fire; the 5-second timeout in `RaiseAndWaitAsync` guards against unexpected hangs.
+- `Denied` — add-in isn't properly registered; `Execute()` will never fire. `RaiseAndWaitAsync` detects this and returns an error immediately.
 
-## Element schema
+**Shared state safety:** each handler stores request parameters (e.g. `PanelName`) as fields. This is safe because only one WebSocket connection is handled at a time — the background thread blocks on the TCS until `Execute()` completes before the next connection can arrive.
 
-Currently `ElementQueryHandler.Execute()` returns `id` (long) and `name` (string) per element — only `OST_ElectricalFixtures` instances, not type definitions.
+## Circuit schema (implemented in CircuitQueryHandler)
 
-**Target schema for Step 8** (key `BuiltInParameter` names for reading each field):
+`ElectricalSystem` is in `Autodesk.Revit.DB.Electrical` (not the parent `Autodesk.Revit.DB`). Key distinction: `ApparentLoad` and `Voltage` are first-class typed properties; `breaker_rating` and `load_classification` are in the parameter bag (`get_Parameter(BuiltInParameter.XXX)`).
 
-| Field | Source | BuiltInParameter |
+| Field | Source | Note |
 |---|---|---|
-| `id` | ElementId.Value | — |
-| `name` | Element.Name | — |
-| `level` | Level name | `LEVEL_PARAM` |
-| `voltage` | Electrical system voltage | `RBS_ELEC_VOLTAGE` |
-| `apparent_load` | Load in VA | `RBS_ELEC_APPARENT_LOAD` |
-| `load_classification` | Load type label | `RBS_ELEC_LOAD_CLASSIFICATION` |
-| `num_poles` | Number of poles | `RBS_ELEC_NUMBER_OF_POLES` |
-| `panel` | Connected panel name | `RBS_ELEC_CIRCUIT_PANEL_PARAM` |
-| `circuit_number` | Circuit number string | `RBS_ELEC_CIRCUIT_NUMBER` |
-| `phase` | 1 / 3 phase | `RBS_ELEC_CIRCUIT_PHASE_PARAM` |
+| `id` | `ElementId.Value` | Pass to `fix_breaker_size` |
+| `circuit_number` | `ElectricalSystem.CircuitNumber` | String, e.g. `"3"` |
+| `panel` | `ElectricalSystem.PanelName` | String |
+| `apparent_load_va` | `ElectricalSystem.ApparentLoad` | VA, internal Revit units |
+| `voltage` | `ElectricalSystem.Voltage` | Volts |
+| `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
+| `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `get_Parameter` |
+| `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | String; drives NEC rule selection |
 
-`panel` and `circuit_number` are `None` for un-circuited fixtures — normal in AEC workflows where circuiting happens after placement. The integrity checker (Step 9) flags fixtures where `panel` is set but that panel element doesn't exist in the model.
+**NEC rule routing by `load_classification`:**
+- `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
+- `Motor` / `HVAC` → NEC 430/440: do not apply 125% rule; report as "manual review required"
 
 ## Planned features
 
-### Step 8 — Enrich element data
-Extend `ElementQueryHandler` to read the parameters above using `element.get_Parameter(BuiltInParameter.XXX)?.AsString()` (or `AsDouble()` for numeric). Also add `OST_ElectricalEquipment` (panels, switchboards, transformers) as a second category so we have both sides of a circuit for Step 9.
+### Step 9 — Agentic breaker fix (`fix_breaker_size`)
 
-### Step 9 — Model integrity checks (`check_model_integrity`)
-A new MCP tool that runs a set of deterministic checks against the data returned by the enriched query:
+New write capability. Two new C# pieces:
 
-- **Broken panel reference** — fixture's `panel` field names a panel that has no matching element in `OST_ElectricalEquipment`. This is the primary conflict class.
-- **Duplicate circuit** — two fixtures share the same `panel` + `circuit_number` but are not on the same `ElectricalSystem`.
-- **Overcapacity** — sum of `apparent_load` on a circuit exceeds the panel breaker rating.
-- **Un-circuited fixtures** — fixtures with `panel = None` (informational, not always a problem).
+- **`BreakerFixHandler.cs`** — `IExternalEventHandler` that accepts `circuit_id` + `new_rating` from shared state, finds the element via `doc.GetElement(new ElementId(circuit_id))`, opens a `Transaction`, sets `RBS_ELEC_CIRCUIT_RATING_PARAM`, commits.
+- **`WebSocketServer.cs`** — add `fix_breaker` arm to the existing switch.
 
-All checks run in Python on the JSON payload returned from Revit — no new C# needed for most of them.
+New Python tool in `main.py`:
+- `fix_breaker_size(circuit_id: int, new_rating: int)` — sends `{"command": "fix_breaker", ...}` over WebSocket. Docstring must make clear this writes to the model and should only be called after user confirmation.
+
+**Transaction** is the new concept: every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()` → `Commit()` / `RollBack()`. The transaction name appears in Revit's undo history. Transactions also run on the UI thread inside `Execute()` — no threading changes needed.
+
+**Interaction design:** Claude must propose the fix and wait for confirmation before calling `fix_breaker_size`. This is enforced through the tool docstring, not code.
 
 ### Step 10 — NEC 2023 code compliance (`check_code_compliance`) — RAG
-A retrieval-augmented tool that answers "does this model comply with NEC 2023 article X?" questions:
 
-- **Corpus**: NEC 2023 (PDF → chunked text → vector embeddings stored locally, e.g. ChromaDB)
-- **Flow**: user asks → retrieve relevant NEC sections → Claude reasons over those sections + live model data → cites specific article numbers in response
-- **Python stack**: `sentence-transformers` or OpenAI embeddings for indexing; `chromadb` for local vector store; retrieval integrated into the MCP tool handler in `main.py`
-- **Future options**: let user select NEC edition (2020, 2023), add ASHRAE 90.1 (energy), LEED electrical credits
+- **Corpus**: NEC 2023 PDF → chunked text → vector embeddings stored locally (ChromaDB)
+- **Flow**: user asks → retrieve relevant NEC sections → Claude reasons over sections + live model data → cites specific article numbers
+- **Python stack**: `sentence-transformers` or OpenAI embeddings; `chromadb` for local vector store; retrieval in `main.py`
+- **Future**: user-selectable NEC edition, ASHRAE 90.1, LEED electrical credits
 
 ## Package manager
 
@@ -149,5 +152,5 @@ This project uses `uv` (not pip). Always use `uv add <package>` to add dependenc
 
 ## Reference documents
 
-- `Pre_Start.md` — step-by-step roadmap (Steps 1–7) with time estimates and learning notes for each step
+- `Pre_Start.md` — step-by-step roadmap (Steps 1–9) with concept explanations and learning notes
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
