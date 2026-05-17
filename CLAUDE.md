@@ -25,6 +25,7 @@ I'm building this Revit MCP server partly to learn. Default to teaching mode:
 ```powershell
 uv sync   # creates .venv and installs dependencies
 ```
+Requires Python 3.12 (pinned in `.python-version`; `uv` manages this automatically).
 
 **Run the MCP server standalone (blocks on stdio):**
 ```powershell
@@ -81,12 +82,27 @@ Live .rvt model
 ## C# add-in file structure
 
 Reading order (the order Revit itself processes them):
-1. `RevitElecMcp.addin` — the only file Revit reads directly. Declares `Type="Application"` (loads at Revit startup, no user button required) and points to the DLL and `FullClassName`.
+1. `RevitElecMcp.addin` — the only file Revit reads directly. Key fields:
+   - `Type="Application"` — loads at Revit startup, no user button required
+   - `Assembly` — bare filename (`RevitElecMcp.dll`); works because both files land in the same Addins folder
+   - `FullClassName` — `RevitElecMcp.App`; must match namespace + class exactly (Revit uses reflection)
+   - `AddInId` — a GUID; generate once, never change — Revit uses it to track the add-in's identity across installs
 2. `RevitElecMcp.csproj` — controls build and deploy. Key details: targets `net8.0-windows`, references Revit 2025 API via `Nice3point.Revit.Api.*` with `ExcludeAssets="runtime"` (don't bundle Revit's own DLLs), and the `CopyToRevitAddins` post-build target copies both files to `%AppData%\Autodesk\Revit\Addins\2025\`.
 3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates all handlers and `ExternalEvent` objects on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
 4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures`, returns `id` + `name` per fixture.
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing.
 6. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it.
+
+## Adding a new tool
+
+Every new tool requires touching four places in this order:
+
+1. **New `XxxHandler.cs`** — implement `IExternalEventHandler`. Add shared-state properties (request params + `TaskCompletionSource<string>`), do the Revit API work in `Execute()`, call `Tcs.SetResult(json)` when done.
+2. **`App.cs`** — in `OnStartup`, construct the handler + `ExternalEvent.Create(handler)`, pass both to `WebSocketServer`.
+3. **`WebSocketServer.cs`** — add a `Handle*Async()` method following the same TCS pattern, add an arm to the `command` switch, and update the constructor signature to accept the new handler and event.
+4. **`main.py`** — add an `@mcp.tool()` async function that calls `_send({"command": "xxx", ...})`. The function name → tool name, docstring → what the LLM sees, type annotations → JSON schema.
+
+After step 4: rebuild the C# project, restart Revit, restart Claude Desktop.
 
 ## Threading model (the non-obvious part)
 
@@ -127,9 +143,9 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 
 ### Step 9 — Agentic breaker fix (`fix_breaker_size`)
 
-New write capability. Two new C# pieces:
+New write capability. Neither file exists yet — follow the "Adding a new tool" pattern above.
 
-- **`BreakerFixHandler.cs`** — `IExternalEventHandler` that accepts `circuit_id` + `new_rating` from shared state, finds the element via `doc.GetElement(new ElementId(circuit_id))`, opens a `Transaction`, sets `RBS_ELEC_CIRCUIT_RATING_PARAM`, commits.
+- **`BreakerFixHandler.cs`** (to create) — `IExternalEventHandler` that accepts `circuit_id` + `new_rating` from shared state, finds the element via `doc.GetElement(new ElementId(circuit_id))`, opens a `Transaction`, sets `RBS_ELEC_CIRCUIT_RATING_PARAM`, commits.
 - **`WebSocketServer.cs`** — add `fix_breaker` arm to the existing switch.
 
 New Python tool in `main.py`:
