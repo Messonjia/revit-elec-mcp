@@ -1,4 +1,4 @@
-# Revit Electrical MCP Server
+# Revit Electrical MCP Server (in development)
 
 An MCP (Model Context Protocol) server that gives AI assistants like Claude direct access
 to a live Revit electrical model. Ask questions about panels, circuits, and devices in plain
