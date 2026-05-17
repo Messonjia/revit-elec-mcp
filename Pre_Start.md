@@ -203,8 +203,8 @@ new FilteredElementCollector(doc)
 
 ```csharp
 var sys = element as ElectricalSystem;
-sys.ApparentLoad     // double, in VA — the total load on this circuit
-sys.Voltage          // double, in volts
+sys.ApparentLoad     // double, in Revit internal units — NOT directly in VA
+sys.Voltage          // double, in Revit internal units — NOT directly in volts
 sys.PolesNumber      // int, 1 or 3
 sys.CircuitNumber    // string, e.g. "3"
 sys.PanelName        // string, e.g. "P-1"
@@ -212,6 +212,19 @@ sys.PanelName        // string, e.g. "P-1"
 
 These are real C# properties, not parameter lookups. You call them like any property on
 any object. No `get_Parameter()` needed.
+
+**Important — always convert `double` values before using them.** Revit stores every
+quantity with a physical unit (lengths, voltages, loads) in an internal unit system that
+is not what you'd expect. `sys.Voltage` does not return 208 or 480 — it returns a raw
+internal value. Always convert:
+
+```csharp
+double volts  = UnitUtils.ConvertFromInternalUnits(sys.Voltage,      UnitTypeId.Volts);
+double loadVA = UnitUtils.ConvertFromInternalUnits(sys.ApparentLoad, UnitTypeId.VoltAmperes);
+```
+
+`UnitTypeId` is an enum of every unit Revit knows about. The rule: **any `double` from
+the Revit API that has a physical unit is in internal units and must be converted.**
 
 The breaker rating is different — covered in Concept 2.
 
@@ -249,6 +262,29 @@ The `BuiltInParameter` enum has thousands of entries, prefixed by system:
 - etc.
 
 For electrical circuits, the parameters you'll use are all `RBS_ELEC_*`.
+
+**Parameters have a `StorageType` — not all of them are strings or doubles.** Before
+calling `AsString()` or `AsDouble()` on an unfamiliar parameter, check which type it
+actually stores:
+
+| StorageType  | Read with       |
+|--------------|-----------------|
+| `String`     | `AsString()`    |
+| `Double`     | `AsDouble()`    |
+| `Integer`    | `AsInteger()`   |
+| `ElementId`  | `AsElementId()` |
+
+`RBS_ELEC_LOAD_CLASSIFICATION` is `StorageType.ElementId` — it stores a reference to a
+`LoadClassification` element, not the classification name itself. Calling `AsString()`
+on it returns `null` every time. You have to call `AsElementId()`, then
+`doc.GetElement(id)?.Name` to get the actual string ("Lighting", "Power", "Motor", etc.):
+
+```csharp
+var lcParam = sys.get_Parameter(BuiltInParameter.RBS_ELEC_LOAD_CLASSIFICATION);
+string lcName = "Unknown";
+if (lcParam?.StorageType == StorageType.ElementId)
+    lcName = doc.GetElement(lcParam.AsElementId())?.Name ?? "Unknown";
+```
 
 ---
 
@@ -404,6 +440,36 @@ Standard sizes: 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100...
 Check that Claude's reasoning matches your manual calc. If it doesn't, the issue is
 either in the data (wrong parameter read) or in the prompt (tool description is misleading
 the model). Both are worth understanding before adding write capability.
+
+---
+
+### Step 8.4 — What first real testing revealed
+
+After Step 8.3, `check_breaker_sizing` was tested against real panels (`EL1`, `HDP`).
+The plumbing worked — the tool ran, the C# handler fired, JSON came back — but the data
+was wrong in three ways:
+
+1. **`voltage` returned 2238.89 V on every circuit** — raw internal units, not converted.
+   Fix: `UnitUtils.ConvertFromInternalUnits(sys.Voltage, UnitTypeId.Volts)`.
+
+2. **`load_classification` returned `"Unknown"` on every circuit** — `AsString()` on an
+   `ElementId`-typed parameter always returns null. Fix: check `StorageType`, use
+   `AsElementId()`, look up element name.
+
+3. **`apparent_load_va` returned 0 on active circuits** — same internal-units issue as
+   voltage, plus we needed a way to distinguish spare slots (zero load intentionally) from
+   active feeders with missing data. Fix: unit conversion + `is_spare = sys.Elements.Size == 0`.
+
+A fourth tool, `list_panels`, was also added — there was no way to enumerate panels
+without knowing their names in advance.
+
+All four bugs are documented with explanations in `Data_Layer_Fixes.md`. Read it — the
+lessons there (internal units, StorageType, spare detection, ElectricalEquipment vs
+ElectricalFixtures) come up repeatedly in Revit API work.
+
+**The meta-lesson:** Revit's API does not throw exceptions for these mistakes. Wrong unit,
+wrong StorageType, wrong category — all compile, all run, all return plausible-looking
+but wrong data. Real testing against a real model is the only way to catch this class of bug.
 
 ---
 
