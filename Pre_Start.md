@@ -203,8 +203,8 @@ new FilteredElementCollector(doc)
 
 ```csharp
 var sys = element as ElectricalSystem;
-sys.ApparentLoad     // double, in Revit internal units — NOT directly in VA
-sys.Voltage          // double, in Revit internal units — NOT directly in volts
+sys.ApparentLoad     // double, in VA — the total load on this circuit
+sys.Voltage          // double, in volts
 sys.PolesNumber      // int, 1 or 3
 sys.CircuitNumber    // string, e.g. "3"
 sys.PanelName        // string, e.g. "P-1"
@@ -212,19 +212,6 @@ sys.PanelName        // string, e.g. "P-1"
 
 These are real C# properties, not parameter lookups. You call them like any property on
 any object. No `get_Parameter()` needed.
-
-**Important — always convert `double` values before using them.** Revit stores every
-quantity with a physical unit (lengths, voltages, loads) in an internal unit system that
-is not what you'd expect. `sys.Voltage` does not return 208 or 480 — it returns a raw
-internal value. Always convert:
-
-```csharp
-double volts  = UnitUtils.ConvertFromInternalUnits(sys.Voltage,      UnitTypeId.Volts);
-double loadVA = UnitUtils.ConvertFromInternalUnits(sys.ApparentLoad, UnitTypeId.VoltAmperes);
-```
-
-`UnitTypeId` is an enum of every unit Revit knows about. The rule: **any `double` from
-the Revit API that has a physical unit is in internal units and must be converted.**
 
 The breaker rating is different — covered in Concept 2.
 
@@ -262,29 +249,6 @@ The `BuiltInParameter` enum has thousands of entries, prefixed by system:
 - etc.
 
 For electrical circuits, the parameters you'll use are all `RBS_ELEC_*`.
-
-**Parameters have a `StorageType` — not all of them are strings or doubles.** Before
-calling `AsString()` or `AsDouble()` on an unfamiliar parameter, check which type it
-actually stores:
-
-| StorageType  | Read with       |
-|--------------|-----------------|
-| `String`     | `AsString()`    |
-| `Double`     | `AsDouble()`    |
-| `Integer`    | `AsInteger()`   |
-| `ElementId`  | `AsElementId()` |
-
-`RBS_ELEC_LOAD_CLASSIFICATION` is `StorageType.ElementId` — it stores a reference to a
-`LoadClassification` element, not the classification name itself. Calling `AsString()`
-on it returns `null` every time. You have to call `AsElementId()`, then
-`doc.GetElement(id)?.Name` to get the actual string ("Lighting", "Power", "Motor", etc.):
-
-```csharp
-var lcParam = sys.get_Parameter(BuiltInParameter.RBS_ELEC_LOAD_CLASSIFICATION);
-string lcName = "Unknown";
-if (lcParam?.StorageType == StorageType.ElementId)
-    lcName = doc.GetElement(lcParam.AsElementId())?.Name ?? "Unknown";
-```
 
 ---
 
@@ -379,51 +343,6 @@ Start your session with:
 **You'll know it worked when:** you ask Claude Desktop "check breaker sizing on panel P-1"
 and get back a JSON list of circuits with load, voltage, poles, and breaker rating — and
 Claude tells you which ones are incorrectly sized.
-Clean build. Here's what was written and why:
-
-  CircuitQueryHandler.cs─(new)─────────────────────────────────────────────────────  - Same IExternalEventHandler pattern as ElementQueryHandler — no new concepts
-  here  - Queries OST_ElectricalCircuit, casts each to ElectricalSystem with as + null
-  filter  - PanelName = null means return all circuits; set it to filter to one panel
-  - The using Autodesk.Revit.DB.Electrical was the one thing I got wrong initially
-  — ElectricalSystem lives in that sub-namespace, not the parent Autodesk.Revit.DB
-
-  WebSocketServer.cs (rewritten)
-  - Two changes worth noting: the received.Count fix (previously the whole
-  4096-byte buffer was passed to GetString, including trailing zeros — now we pass
-  only the actual bytes received), and RaiseAndWaitAsync extracted as a shared
-  helper so the Denied/timeout logic doesn't repeat in every command arm
-
-  App.cs — creates both handlers + events at startup, passes both to
-  WebSocketServer
-
-  main.py — _send() helper extracted so both tools share the connect/send/recv
-  pattern rather than duplicating it; the check_breaker_sizing docstring includes
-  the NEC 210.20(A) formula because that's what Claude reads when deciding how to
-  reason about the data
-
-  Question you should be able to answer: HandleConnectionAsync has a try/catch
-  around the routing block, and each handler's Execute() also has its own
-  try/catch. Why do we need both — what does each one catch that the other can't?
-  Two different failure locations, two different catchers.
-
-  HandleConnectionAsync try/catch catches failures that happen before Revit is ever   involved — malformed JSON from Python, a missing "command" property, a missing
-  "panel" property. At that point we're still on the background thread, no  ExternalEvent has been raised, and Revit hasn't been touched. If we didn't catch
-  here, the exception would bubble up and crash the WebSocket loop.
-
-  Execute() try/catch catches failures that happen inside Revit — the document is
-  in a bad state, the FilteredElementCollector throws, a parameter read fails. At
-  that point we're on the UI thread, and there's no way for an exception to travel
-  back to the background thread naturally. If Execute() throws uncaught, Revit
-  itself absorbs it silently — and the TaskCompletionSource never gets SetResult()
-  called, so the background thread hangs until the 5-second timeout fires and
-  returns a generic "timed out" error instead of the real error message.
-
-  The Execute() catch exists to convert Revit-side exceptions into a JSON error
-  string that can actually reach the caller.
-
-  The short version: one catch is for bad input before Revit, the other is for
-  Revit failures that would otherwise disappear silently.
----
 
 ### Step 8.3 — Verify the reasoning (alone, ~20 min)
 
@@ -440,36 +359,6 @@ Standard sizes: 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100...
 Check that Claude's reasoning matches your manual calc. If it doesn't, the issue is
 either in the data (wrong parameter read) or in the prompt (tool description is misleading
 the model). Both are worth understanding before adding write capability.
-
----
-
-### Step 8.4 — What first real testing revealed
-
-After Step 8.3, `check_breaker_sizing` was tested against real panels (`EL1`, `HDP`).
-The plumbing worked — the tool ran, the C# handler fired, JSON came back — but the data
-was wrong in three ways:
-
-1. **`voltage` returned 2238.89 V on every circuit** — raw internal units, not converted.
-   Fix: `UnitUtils.ConvertFromInternalUnits(sys.Voltage, UnitTypeId.Volts)`.
-
-2. **`load_classification` returned `"Unknown"` on every circuit** — `AsString()` on an
-   `ElementId`-typed parameter always returns null. Fix: check `StorageType`, use
-   `AsElementId()`, look up element name.
-
-3. **`apparent_load_va` returned 0 on active circuits** — same internal-units issue as
-   voltage, plus we needed a way to distinguish spare slots (zero load intentionally) from
-   active feeders with missing data. Fix: unit conversion + `is_spare = sys.Elements.Size == 0`.
-
-A fourth tool, `list_panels`, was also added — there was no way to enumerate panels
-without knowing their names in advance.
-
-All four bugs are documented with explanations in `Data_Layer_Fixes.md`. Read it — the
-lessons there (internal units, StorageType, spare detection, ElectricalEquipment vs
-ElectricalFixtures) come up repeatedly in Revit API work.
-
-**The meta-lesson:** Revit's API does not throw exceptions for these mistakes. Wrong unit,
-wrong StorageType, wrong category — all compile, all run, all return plausible-looking
-but wrong data. Real testing against a real model is the only way to catch this class of bug.
 
 ---
 
@@ -536,6 +425,34 @@ After reading, you should be able to answer:
 - Why does the transaction also have to be on the UI thread?
 - Where does the transaction name appear in Revit?
 
+1. Forget tx.Commit() or tx.RollBack()
+
+  Half right. If you forget Commit(), yes — the change won't persist. But here's the   more accurate picture: if the Transaction object gets disposed (goes out of
+  scope) without a Commit() or RollBack(), Revit automatically abandons it, which  behaves the same as RollBack(). Revit is deliberately defensive — it won't leave a   half-open transaction hanging.
+
+  RollBack() isn't for Ctrl+Z — that's a separate concept. RollBack() is what you
+  call inside your own code when something goes wrong during the write, to undo the
+  partial changes before returning an error. Ctrl+Z is what the user does after a
+  committed transaction to undo a complete, successful change.
+
+  The two are independent:
+  - RollBack() = "my code detected a problem, discard everything" (user never sees
+  it)
+  - Ctrl+Z = "the user changed their mind after a successful commit"
+
+  2. Transaction must be on the UI thread
+
+  Correct. All Revit API calls — read or write — are restricted to the UI thread. A
+  transaction is a Revit API operation. Same rule, no exception.
+
+  3. Where the transaction name appears
+
+  Not at the moment you start the transaction — after it's committed. It shows up in   Revit's undo history: when the user presses Ctrl+Z, the tooltip or undo menu
+  shows the name you passed to new Transaction(doc, "Fix breaker size"). That's how
+  the user knows what they're undoing. If you name it something vague like
+  "Transaction1", the undo history is useless. Name it to describe what actually
+  changed.
+
 ---
 
 ### Step 9.2 — Build the write handler (Claude Code, teaching mode, ~1 hour)
@@ -567,7 +484,22 @@ Start your session with:
 **You'll know it worked when:** you send a raw WebSocket message with
 `{"command": "fix_breaker", "circuit_id": <id>, "new_rating": 40}` and the breaker
 rating updates in the live Revit model.
+Recap:
+  - BreakerFixHandler.cs — validates the element exists and is an ElectricalSystem,
+  checks the parameter isn't read-only, then opens a Transaction, sets the rating
+  with ConvertToInternalUnits, and commits. The using inside try means if anything
+  throws after Start(), the transaction is auto-abandoned before the catch runs —
+  the catch only needs to report the error.
+  - main.py — the fix_breaker_size docstring carries the entire interaction
+  contract: what it writes, that it's immediate and permanent, what Ctrl+Z shows,
+  and that confirmation must come before calling it.
+  - App.cs / WebSocketServer.cs — same 4-file wiring pattern as every other tool.
+  - "fix_breaker" switch arm — extracts both circuit_id (as Int64) and new_rating
+  (as Double) from the incoming JSON before handing off to the handler.
 
+  Question you should be able to answer: Why is the Transaction declared with using
+  inside the try block rather than outside it — and what exactly happens to the
+  transaction if param.Set() throws an exception?
 ---
 
 ### Step 9.3 — Wire the agentic loop (Claude Code, ~30 min)
@@ -598,7 +530,58 @@ without first stating what it intends to do and waiting for your response.
 **You'll know it worked when:** a broken breaker size in your live model gets corrected
 through a natural language conversation, and you can Ctrl+Z in Revit to verify the
 change was really written.
+ ##Start here:
+ Step 9.3 is different from all the previous steps — there's no code to write. Both
+   tools exist. This step is entirely about verifying that the interaction design
+  works correctly in practice.
 
+  The key thing to understand first:
+
+  There is no code that prevents Claude from calling fix_breaker_size immediately  without asking you. No lock, no guard, no gate in the C# or Python layer. The only   enforcement mechanism is the tool docstring — what Claude reads when it decides
+  how to use the tool. This is a deliberate design choice in MCP: the LLM's behavior   is shaped by the tool description, not by code constraints.
+
+  The docstring we wrote says:
+
+  ▎ "Only call this tool after explaining the proposed change to the user and
+  ▎ receiving explicit confirmation."
+
+  That instruction to Claude is the entire safety mechanism. If it works, Claude
+  will always propose before acting. If the docstring were vague, Claude might act
+  immediately.
+
+  ---
+  What you need to do for 9.3:
+
+  First, rebuild and restart everything (the C# changes from Step 9.2 aren't in
+  Revit yet):
+
+  dotnet build revit_addin\RevitElecMcp\RevitElecMcp.csproj
+
+  Then restart Revit (with a model open) and restart Claude Desktop.
+
+  Test the full loop with this prompt in Claude Desktop:
+
+  ▎ "Check breaker sizing on [your panel name] and fix anything that's wrong."
+
+  Watch for this exact sequence — Claude should:
+  1. Call check_breaker_sizing → get circuit data
+  2. Reason over it, identify which circuits are undersized
+  3. Stop and explain what it found and what it proposes — without writing anything
+  yet
+  4. Wait for you to say yes
+  5. Only then call fix_breaker_size
+
+  Then verify it actually wrote to the model:
+  - Open the panel schedule in Revit — the breaker rating should be updated
+  - Press Ctrl+Z in Revit — you should see "Undo: Fix breaker size" and the old
+  rating should come back
+
+  You'll know it worked when the Ctrl+Z in Revit confirms the change was really
+  written and is reversible — not just that Claude said it was done.
+
+  ---
+  If Claude skips the confirmation step and calls fix_breaker_size immediately, the
+  fix is to strengthen the docstring — not add code. Come back and we can revise the   wording. That's a prompt engineering problem, not a code problem.
 ---
 
 ## What success looks like (Steps 8–9)

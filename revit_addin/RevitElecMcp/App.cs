@@ -19,7 +19,10 @@ public class App : IExternalApplication
         var panelHandler = new PanelQueryHandler();
         var panelEvent   = ExternalEvent.Create(panelHandler);
 
-        _server = new WebSocketServer(elementHandler, elementEvent, circuitHandler, circuitEvent, panelHandler, panelEvent);
+        var breakerFixHandler = new BreakerFixHandler();
+        var breakerFixEvent   = ExternalEvent.Create(breakerFixHandler);
+
+        _server = new WebSocketServer(elementHandler, elementEvent, circuitHandler, circuitEvent, panelHandler, panelEvent, breakerFixHandler, breakerFixEvent);
 
         // Start the WebSocket listener on a background thread — if we awaited it here,
         // OnStartup would block and Revit would hang on startup.

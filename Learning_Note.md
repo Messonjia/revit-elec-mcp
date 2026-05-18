@@ -800,3 +800,72 @@ What we're building
   The short version: one catch is for bad input before Revit, the other is for
   Revit failures that would otherwise disappear silently.
 ---
+
+What a Transaction actually is
+
+  Think of Revit's document as a database. While the model is open, it lives
+  entirely in memory — the .rvt file on disk isn't touched until the user clicks
+  Save. A Transaction is Revit's write-lock on that in-memory database. Without one,   Revit refuses all modifications and throws immediately. With one open, Revit
+  tracks every change you make so it can either finalize or discard them as a unit.
+  ---
+  The three operations
+
+  Start() — opens the write lock and begins tracking. From this moment, Revit
+  journals every change: parameter sets, element creations, deletions. The model is
+  now in a "modified" state. Nothing is visible to the user yet — the panel schedule   in Revit still shows the old breaker rating.
+
+  Commit() — finalizes everything since Start(). Two things happen: the changes
+  become visible in the model (the panel schedule now shows the new rating), and one   entry is added to Revit's undo stack using the name you passed to the
+  constructor. The write lock is released. Importantly, this does NOT save to disk —   that still requires the user to Ctrl+S.
+
+  RollBack() — discards everything since Start(). The model snaps back to exactly
+  the state it was in before Start() was called. Nothing goes to the undo stack — as   far as the user is concerned, nothing happened. The write lock is released.
+
+  Both Commit() and RollBack() return a TransactionStatus enum. Commit() can fail —
+  for example, if the model is a cloud model that someone else has checked out, or
+  if Revit's regeneration step detects an invalid model state. You should check the
+  return value rather than assuming success.
+
+  ---
+  Where it lives relative to ExternalEvent
+
+  This is the key structural question, and the answer flows directly from the
+  threading model you already know:
+
+  - Transactions are Revit API calls.
+  - All Revit API calls must be on the UI thread.
+  - Execute() is the only method Revit calls on the UI thread.
+
+  Therefore: the Transaction opens and closes entirely inside Execute(). Not in the
+  WebSocket handler, not in main.py, not in any background thread. The background
+  WebSocket thread's job is only to set shared state (circuit_id, new_rating) and
+  raise the ExternalEvent. By the time the Transaction opens, the background thread
+  is already blocked, waiting on the TaskCompletionSource.
+
+  The sequence looks like this:
+
+  Background thread:  set circuit_id, new_rating → Raise() → await TCS
+                                                                ↓
+  UI thread (Execute()):                              open Transaction → set
+  parameter → Commit() → SetResult()
+
+                    ↓
+  Background thread:
+         unblocked → send response over WebSocket
+
+  The Transaction is invisible to Python and to the MCP layer entirely. It's a C#
+  concern, inside one method, on the UI thread.
+
+  ---
+  One defensive detail worth knowing
+
+  Transaction implements IDisposable. If Execute() throws an unhandled exception and   the Transaction was never committed or rolled back, Revit disposes it
+  automatically and treats it as an abandoned transaction — same effect as
+  RollBack(). This is Revit being defensive: it will never leave a dangling write
+  lock. That said, you don't want to rely on this — you want to call RollBack()
+  explicitly in your catch block so you can also call Tcs.SetResult() with a real
+  error message rather than leaving the background thread to time out.
+
+  ---
+  Say go when you're ready to write BreakerFixHandler.cs and the fix_breaker_size
+  tool.

@@ -67,6 +67,23 @@ async def check_breaker_sizing(panel: str) -> str:
 
 
 @mcp.tool()
+async def fix_breaker_size(circuit_id: int, new_rating: int) -> str:
+    """WRITES TO THE REVIT MODEL. Set the breaker rating for a single circuit.
+
+    circuit_id — the integer element ID returned by check_breaker_sizing
+    new_rating — new breaker size in amperes; must be a standard size:
+                 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200
+
+    IMPORTANT: This immediately modifies the live Revit model. Only call this tool
+    after explaining the proposed change to the user and receiving explicit confirmation.
+    The change appears in Revit's undo history as "Fix breaker size" and can be undone
+    with Ctrl+Z.
+
+    Requires Revit to be open with the model loaded and the RevitElecMcp add-in active."""
+    return await _send({"command": "fix_breaker", "circuit_id": circuit_id, "new_rating": new_rating})
+
+
+@mcp.tool()
 async def list_panels() -> str:
     """Return all electrical panels (distribution equipment) in the live Revit model.
     Each entry has an 'id' (integer) and 'name' (string).

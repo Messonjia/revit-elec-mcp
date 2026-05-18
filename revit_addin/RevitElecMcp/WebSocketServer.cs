@@ -14,20 +14,25 @@ public class WebSocketServer
     private readonly ExternalEvent _circuitEvent;
     private readonly PanelQueryHandler _panelHandler;
     private readonly ExternalEvent _panelEvent;
+    private readonly BreakerFixHandler _breakerFixHandler;
+    private readonly ExternalEvent _breakerFixEvent;
     private readonly HttpListener _listener;
     private CancellationTokenSource? _cts;
 
     public WebSocketServer(
         ElementQueryHandler elementHandler, ExternalEvent elementEvent,
         CircuitQueryHandler circuitHandler,  ExternalEvent circuitEvent,
-        PanelQueryHandler panelHandler,      ExternalEvent panelEvent)
+        PanelQueryHandler panelHandler,      ExternalEvent panelEvent,
+        BreakerFixHandler breakerFixHandler, ExternalEvent breakerFixEvent)
     {
-        _elementHandler = elementHandler;
-        _elementEvent   = elementEvent;
-        _circuitHandler = circuitHandler;
-        _circuitEvent   = circuitEvent;
-        _panelHandler   = panelHandler;
-        _panelEvent     = panelEvent;
+        _elementHandler    = elementHandler;
+        _elementEvent      = elementEvent;
+        _circuitHandler    = circuitHandler;
+        _circuitEvent      = circuitEvent;
+        _panelHandler      = panelHandler;
+        _panelEvent        = panelEvent;
+        _breakerFixHandler = breakerFixHandler;
+        _breakerFixEvent   = breakerFixEvent;
 
         // HttpListener is .NET's built-in HTTP/WebSocket server — no NuGet needed.
         // The trailing slash is required by HttpListener; omitting it throws at Start().
@@ -92,6 +97,9 @@ public class WebSocketServer
                 "get_circuits" => await HandleGetCircuitsAsync(
                     doc.RootElement.GetProperty("panel").GetString()),
                 "list_panels"  => await HandleGetPanelsAsync(),
+                "fix_breaker"  => await HandleFixBreakerAsync(
+                    doc.RootElement.GetProperty("circuit_id").GetInt64(),
+                    doc.RootElement.GetProperty("new_rating").GetDouble()),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown command: {command}" })
             };
         }
@@ -125,6 +133,15 @@ public class WebSocketServer
         var tcs = new TaskCompletionSource<string>();
         _panelHandler.Tcs = tcs;
         return await RaiseAndWaitAsync(_panelEvent, tcs);
+    }
+
+    private async Task<string> HandleFixBreakerAsync(long circuitId, double newRating)
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _breakerFixHandler.CircuitId = circuitId;
+        _breakerFixHandler.NewRating = newRating;
+        _breakerFixHandler.Tcs       = tcs;
+        return await RaiseAndWaitAsync(_breakerFixEvent, tcs);
     }
 
     // Every handler follows the same raise → check denied → await with timeout pattern.
