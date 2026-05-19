@@ -597,3 +597,212 @@ update the model.
 You open Revit, check circuit 3 on P-1, and see the breaker is now 40A.
 Ctrl+Z in Revit undoes the change. That's the full agentic loop: read → reason →
 propose → confirm → write → verifiable in the model.
+
+---
+
+## Step 10 — Structured NEC compliance checks
+
+The goal: a new MCP tool `check_code_compliance(panel)` that applies NEC rules as
+explicit Python logic and returns a circuit-by-circuit compliance report. Claude reads
+the report and explains it — but the pass/fail determination is made by code, not by
+the model interpreting a docstring.
+
+This is a deliberate design shift. Right now, the NEC 210.20(A) rule lives in the
+`check_breaker_sizing` docstring — Claude reads it and applies it in-context. That
+works, but it has a problem: the same input might get slightly different reasoning on
+different runs. For compliance work, the determination of "this breaker is undersized"
+should be deterministic and auditable — the same input must always produce the same
+output, and you should be able to read the code to see exactly which rule was applied.
+
+No NEC text is stored or embedded. The rules are encoded directly as Python logic,
+which avoids copyright questions and is more reliable for the fixed numerical thresholds
+we actually need.
+
+---
+
+### Step 10.1 — Read, don't build yet (alone, ~30 min)
+
+Two concepts before any code.
+
+---
+
+**Concept 1 — Rules as code vs. rules as prompts: why it matters**
+
+The current approach embeds the NEC rule in the `check_breaker_sizing` docstring:
+
+```
+required_rating = next standard size >= load_amps * 1.25
+```
+
+Claude reads that and applies it. It works. But consider what you're relying on:
+- Claude must parse the docstring correctly every time
+- Claude must apply the arithmetic correctly
+- If Claude makes an error, there's no way to catch it before the output reaches you
+- The "rule" isn't testable — you can't write a unit test against a docstring
+
+Move that same logic into Python:
+
+```python
+def required_breaker(load_va: float, voltage: float, poles: int) -> int:
+    load_amps = load_va / voltage if poles == 1 else load_va / (voltage * 1.732)
+    continuous = load_amps * 1.25  # NEC 210.20(A)
+    return next_standard_size(continuous)
+```
+
+Now the logic is deterministic, testable, and readable. Claude's job changes: instead
+of doing the math, it reads a structured compliance report and explains what it means.
+
+This is a general principle in AI system design: **move deterministic logic into code;
+leave judgment and explanation to the model.**
+
+---
+
+**Concept 2 — NEC 240.6(A): standard breaker sizes**
+
+NEC 240.6(A) lists the standard ampere ratings for fuses and fixed-trip circuit
+breakers. These are not arbitrary — they're what manufacturers actually produce.
+A "37A breaker" does not exist. If your load requires 46.25A, the correct breaker is
+50A (next standard size up).
+
+The standard sizes you'll need:
+
+```
+15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200
+```
+
+Two failure modes to check against this list:
+- **Undersized**: `breaker_rating < required` — dangerous; the circuit can carry more
+  current than the breaker protects against
+- **Non-standard**: `breaker_rating not in STANDARD_SIZES` — shouldn't exist in a
+  real model but worth flagging as a data quality issue
+
+After reading, you should be able to answer:
+- Why is it better to encode the 210.20(A) formula in Python rather than leave it in
+  the docstring?
+
+  The docstring approach works but it's non-deterministic — Claude applies the rule,
+  and LLM output can vary between runs. Moving it to Python means the same load always
+  produces the same required breaker rating. You can write a test against that function.
+  You can read it in a code review. The model's role becomes explaining the result, not
+  computing it.
+
+- What does NEC 240.6(A) govern, and why does it constrain which breaker sizes are valid?
+
+  240.6(A) lists the standard ampere ratings for overcurrent protective devices — the
+  sizes that manufacturers actually produce. Specifying a non-standard size (e.g., 37A)
+  isn't meaningful because no such device exists. The list constrains the output of
+  `next_standard_size()` to values that can actually be purchased and installed.
+
+---
+
+### Step 10.2 — Build `nec_rules.py` (Claude Code, teaching mode, ~45 min)
+
+One new file: pure Python, no Revit, no MCP, no WebSocket. It takes circuit data as
+dicts and returns compliance results as dicts. Nothing in it touches the rest of the
+system — that's the point.
+
+> Before writing any code, explain the design: I want to encode NEC 210.20(A) and
+> NEC 240.6(A) as pure Python functions that take a circuit dict as input and return
+> a compliance result. What should the return dict contain to be most useful to Claude
+> when it reads the report? Don't write code yet.
+
+What you're building:
+
+**`nec_rules.py`**
+
+The key function is `check_circuit(circuit: dict) -> dict`. It handles three cases:
+
+1. **Spare circuits** (`is_spare == True`) — skip NEC sizing, return `"status": "spare"`
+2. **Motor / HVAC loads** — do not apply the 125% rule (NEC 430/440 governs instead),
+   return `"status": "manual_review"` with the NEC reference
+3. **Everything else** — apply NEC 210.20(A), compare `required_rating` to
+   `breaker_rating`, return `"status": "pass"` or `"fail"`
+
+Every result dict must include a `nec_ref` field (e.g. `"NEC 210.20(A)"`) so the
+report is self-documenting — Claude cites the article without having to look it up.
+
+The `next_standard_size(amps: float) -> int` helper finds the smallest value in
+`STANDARD_SIZES` that is greater than or equal to `amps`. Watch the edge case: if
+`amps` is exactly 20.0, the result must be 20, not 25.
+
+**You'll know it worked when:** you call
+
+```python
+check_circuit({
+    "apparent_load_va": 1800, "voltage": 120, "poles": 1,
+    "breaker_rating": 15, "is_spare": False, "load_classification": "Lighting",
+    "circuit_number": "3", "panel": "P-1", "id": 5544
+})
+```
+
+and get back `{"status": "fail", "required_rating": 20, "actual_rating": 15,
+"nec_ref": "NEC 210.20(A)", ...}`.
+
+---
+
+### Step 10.3 — Build the `check_code_compliance` tool (Claude Code, ~30 min)
+
+Wire `nec_rules.py` into a new MCP tool. No new C# required — this reuses the
+existing `get_circuits` WebSocket command already implemented in Step 8.
+
+> Before writing any code: check_code_compliance needs to fetch live circuit data
+> from Revit and then apply the Python rules from nec_rules.py. Should it reuse the
+> _send() helper directly, or call check_breaker_sizing internally? What are the
+> tradeoffs? Don't write code yet.
+
+What you're building in `main.py`:
+
+**`check_code_compliance(panel: str)`**
+
+1. Sends `{"command": "get_circuits", "panel": panel}` via `_send()` — same command
+   as `check_breaker_sizing`, same C# handler, no new wiring needed
+2. Parses the JSON into a list of circuit dicts
+3. Calls `nec_rules.check_circuit()` on each
+4. Returns the full compliance report as JSON
+
+The docstring should tell Claude that this tool returns a structured pass/fail report
+and that Claude's job is to summarize and explain — not to redo the arithmetic.
+
+**You'll know it worked when:** you ask Claude Desktop "check code compliance for
+panel P-1" and get back a per-circuit pass/fail list with NEC article citations —
+and Claude's explanation contains no arithmetic, only interpretation of the report.
+
+---
+
+### Step 10.4 — Verify the results (alone, ~20 min)
+
+Pick two circuits from your panel — one that should pass, one that should fail.
+Manually compute the required breaker for the failing one:
+
+```
+load_amps = apparent_load_va / voltage          (single-phase)
+           apparent_load_va / (voltage × 1.732) (three-phase)
+required  = load_amps × 1.25                    (NEC 210.20(A))
+breaker   = next standard size ≥ required       (NEC 240.6(A))
+```
+
+Confirm the tool returns the same answer. If it doesn't, the bug is in `nec_rules.py`
+— readable code you can step through, not a prompt you have to re-word.
+
+Test one edge case: a circuit where `load_amps × 1.25` lands exactly on a standard
+size (e.g., exactly 20.0A). The result must be 20A, not 25A — "≥" includes equal.
+
+**You'll know it worked when:** the tool output matches your manual calculation on
+every circuit, and Claude's explanation cites the NEC article without performing any
+arithmetic itself.
+
+---
+
+## What success looks like (Step 10)
+
+You type in Claude Desktop:
+> "Run a code compliance check on panel P-1."
+
+Claude calls `check_code_compliance("P-1")`. Python applies NEC 210.20(A) and
+240.6(A) to every circuit. Claude receives a structured report — status, required
+rating, actual rating, and NEC reference per circuit — and explains what it means in
+plain language, identifying which circuits are undersized and what the correct breaker
+size would be.
+
+The arithmetic was done by code. The explanation was done by Claude. Each is doing
+what it's best at.

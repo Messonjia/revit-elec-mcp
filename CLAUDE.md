@@ -53,7 +53,7 @@ Then restart Claude Desktop. No automated tests exist — test tools manually by
 
 # Architecture
 
-## Current state (Steps 1–8 complete)
+## Current state (Steps 1–9 complete)
 
 ```
 Claude Desktop
@@ -75,8 +75,9 @@ Live .rvt model
 |---|---|---|
 | `ping` | Verify the MCP server is reachable | Done |
 | `query_elements` | Returns electrical fixtures (id + name) from live Revit model | Done |
-| `check_breaker_sizing(panel)` | Returns circuits on a panel with load + breaker data; Claude applies NEC 210.20(A) | Done (Step 8) |
-| `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Step 9 |
+| `list_panels` | Returns all electrical panels (distribution equipment) — call this first to discover panel names | Done |
+| `check_breaker_sizing(panel)` | Returns circuits on a panel with load + breaker data; Claude applies NEC 210.20(A) | Done |
+| `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Done (Step 9) |
 | `check_code_compliance` | NEC 2023 compliance via RAG | Step 10 |
 
 ## C# add-in file structure
@@ -90,8 +91,10 @@ Reading order (the order Revit itself processes them):
 2. `RevitElecMcp.csproj` — controls build and deploy. Key details: targets `net8.0-windows`, references Revit 2025 API via `Nice3point.Revit.Api.*` with `ExcludeAssets="runtime"` (don't bundle Revit's own DLLs), and the `CopyToRevitAddins` post-build target copies both files to `%AppData%\Autodesk\Revit\Addins\2025\`.
 3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates all handlers and `ExternalEvent` objects on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
 4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures`, returns `id` + `name` per fixture.
-5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing.
-6. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it.
+5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
+6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — not fixtures), returns `id` + `name`.
+7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
+8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it.
 
 ## Adding a new tool
 
@@ -139,21 +142,15 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 - `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
 - `Motor` / `HVAC` → NEC 430/440: do not apply 125% rule; report as "manual review required"
 
+## Revit write pattern (implemented in BreakerFixHandler)
+
+Every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()` → `Commit()` / `RollBack()`. The transaction name shows up in Revit's undo history (`Ctrl+Z`). Using `using var tx` ensures `Dispose()` is called on exception, which abandons (not rolls back) the transaction — but the effect is the same. Transactions also run on the UI thread inside `Execute()` — no threading changes needed.
+
+`param.Set()` takes internal units — always call `UnitUtils.ConvertToInternalUnits(value, UnitTypeId.Amperes)` before setting, just as you call `ConvertFromInternalUnits` when reading.
+
+**Interaction design:** `fix_breaker_size` must only be called after user confirmation. This is enforced through the tool docstring (which the LLM sees), not code.
+
 ## Planned features
-
-### Step 9 — Agentic breaker fix (`fix_breaker_size`)
-
-New write capability. Neither file exists yet — follow the "Adding a new tool" pattern above.
-
-- **`BreakerFixHandler.cs`** (to create) — `IExternalEventHandler` that accepts `circuit_id` + `new_rating` from shared state, finds the element via `doc.GetElement(new ElementId(circuit_id))`, opens a `Transaction`, sets `RBS_ELEC_CIRCUIT_RATING_PARAM`, commits.
-- **`WebSocketServer.cs`** — add `fix_breaker` arm to the existing switch.
-
-New Python tool in `main.py`:
-- `fix_breaker_size(circuit_id: int, new_rating: int)` — sends `{"command": "fix_breaker", ...}` over WebSocket. Docstring must make clear this writes to the model and should only be called after user confirmation.
-
-**Transaction** is the new concept: every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()` → `Commit()` / `RollBack()`. The transaction name appears in Revit's undo history. Transactions also run on the UI thread inside `Execute()` — no threading changes needed.
-
-**Interaction design:** Claude must propose the fix and wait for confirmation before calling `fix_breaker_size`. This is enforced through the tool docstring, not code.
 
 ### Step 10 — NEC 2023 code compliance (`check_code_compliance`) — RAG
 
