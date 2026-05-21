@@ -90,11 +90,11 @@ Reading order (the order Revit itself processes them):
    - `AddInId` — a GUID; generate once, never change — Revit uses it to track the add-in's identity across installs
 2. `RevitElecMcp.csproj` — controls build and deploy. Key details: targets `net8.0-windows`, references Revit 2025 API via `Nice3point.Revit.Api.*` with `ExcludeAssets="runtime"` (don't bundle Revit's own DLLs), and the `CopyToRevitAddins` post-build target copies both files to `%AppData%\Autodesk\Revit\Addins\2025\`.
 3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates all handlers and `ExternalEvent` objects on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
-4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures`, returns `id` + `name` per fixture.
+4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures` (receptacles, luminaires, HRU connections — devices wired *to* circuits, not the panels themselves), returns `id` + `name` per fixture.
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
 6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — not fixtures), returns `id` + `name`.
 7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
-8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it.
+8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. The receive buffer is 4096 bytes — commands or responses larger than this will be silently truncated; keep that in mind for tools that return large datasets.
 
 ## Adding a new tool
 
@@ -135,7 +135,7 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `apparent_load_va` | `ElectricalSystem.ApparentLoad` | VA, internal Revit units |
 | `voltage` | `ElectricalSystem.Voltage` | Volts |
 | `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
-| `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `get_Parameter` |
+| `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `get_Parameter` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
 | `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | String; drives NEC rule selection |
 
 **NEC rule routing by `load_classification`:**
@@ -162,6 +162,8 @@ Every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()
 ## Package manager
 
 This project uses `uv` (not pip). Always use `uv add <package>` to add dependencies; `uv sync` to install from the lock file. The lock file (`uv.lock`) is committed and should stay in sync.
+
+Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]` (FastMCP + CLI tooling) and `websockets` (async WebSocket client). Everything else is transitive. Step 10 will add `chromadb` and an embeddings library.
 
 ## Reference documents
 

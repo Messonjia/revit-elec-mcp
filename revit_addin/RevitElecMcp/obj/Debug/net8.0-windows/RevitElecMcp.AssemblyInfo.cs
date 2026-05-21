@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RevitElecMcp")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5a8c55ff9d414f142f652616cd484937d2eb1014")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+45d1e1012399858fc59a94193f3ea5019e6634c5")]
 [assembly: System.Reflection.AssemblyProductAttribute("RevitElecMcp")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RevitElecMcp")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
