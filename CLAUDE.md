@@ -32,6 +32,12 @@ Requires Python 3.12 (pinned in `.python-version`; `uv` manages this automatical
 .venv\Scripts\python.exe main.py
 ```
 
+**Test tools interactively without Claude Desktop (MCP Inspector UI in browser):**
+```powershell
+uv run mcp dev main.py
+```
+Note: tools that call `_send` will fail unless Revit is also open — `ping` works standalone.
+
 **Build the C# Revit add-in:**
 ```powershell
 dotnet build revit_addin\RevitElecMcp\RevitElecMcp.csproj
@@ -97,7 +103,7 @@ Reading order (the order Revit itself processes them):
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
 6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — not fixtures), returns `id` + `name`.
 7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
-8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. The receive buffer is 4096 bytes — commands or responses larger than this will be silently truncated; keep that in mind for tools that return large datasets.
+8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Known footgun:** the receive buffer is 4096 bytes — responses larger than this are silently truncated at the byte boundary, producing unparseable JSON. A panel with ~40+ circuits will exceed this. If adding a new handler that could return large datasets, increase `buffer` in `HandleConnectionAsync` or implement chunked reads.
 
 ## Adding a new tool
 
@@ -108,7 +114,7 @@ Every tool that needs new Revit data requires touching four places in this order
 1. **New `XxxHandler.cs`** — implement `IExternalEventHandler`. Add shared-state properties (request params + `TaskCompletionSource<string>`), do the Revit API work in `Execute()`, call `Tcs.SetResult(json)` when done.
 2. **`App.cs`** — in `OnStartup`, construct the handler + `ExternalEvent.Create(handler)`, pass both to `WebSocketServer`.
 3. **`WebSocketServer.cs`** — add a `Handle*Async()` method following the same TCS pattern, add an arm to the `command` switch, and update the constructor signature to accept the new handler and event.
-4. **`main.py`** — add an `@mcp.tool()` async function that calls `_send({"command": "xxx", ...})`. The function name → tool name, docstring → what the LLM sees, type annotations → JSON schema.
+4. **`main.py`** — add an `@mcp.tool()` async function that calls `_send({"command": "xxx", ...})`. The function name → tool name, docstring → what the LLM sees, type annotations → JSON schema. All tools that touch Revit must be `async def`; `ping` is the only synchronous tool because it never calls `_send`.
 
 After step 4: rebuild the C# project, restart Revit, restart Claude Desktop.
 
@@ -157,7 +163,7 @@ Every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()
 
 ## `nec_rules.py` — NEC rule engine
 
-Pure Python, no external dependencies. Two public symbols:
+Pure Python, no external dependencies. Three public symbols (plus `MOTOR_LOAD_TYPES`, which is module-level but not imported by `main.py`):
 
 - **`STANDARD_SIZES`** — NEC 240.6(A) list `[15, 20, 25, ..., 200]`. Single source of truth; `next_standard_size` and the tool docstrings both reference this.
 - **`next_standard_size(amps: float) -> int`** — returns the smallest standard size `>= amps`. Exact matches are not rounded up (e.g. `20.0 → 20`, not `25`).
