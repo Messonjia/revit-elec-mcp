@@ -53,21 +53,24 @@ Then restart Claude Desktop. No automated tests exist — test tools manually by
 
 # Architecture
 
-## Current state (Steps 1–9 complete)
+## Current state (Steps 1–10 complete)
 
 ```
 Claude Desktop
     ↓ JSON-RPC over stdio
 main.py  (FastMCP server, runs outside Revit)
+    ├── nec_rules.py  (pure Python NEC logic — no Revit, no MCP, no WebSocket)
     ↓ WebSocket ws://localhost:8765
 C# Revit add-in (RevitElecMcp.dll, inside Revit's process)
     ↓ ExternalEvent → UI thread → FilteredElementCollector / ElectricalSystem
 Live .rvt model
 ```
 
-`main.py` is the entire Python server. FastMCP introspects each `@mcp.tool()` decorated function: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
+`main.py` is the MCP server. FastMCP introspects each `@mcp.tool()` decorated function: function name → tool name, docstring → LLM-visible description, type annotations → JSON Schema for parameters. Return type `str` is auto-wrapped in `TextContent`.
 
 `_send(payload)` is a shared async helper in `main.py` — all tools use it to connect, send, and receive over WebSocket rather than duplicating that logic.
+
+`nec_rules.py` is a pure Python module imported by `main.py`. It contains deterministic NEC rule logic that operates on circuit dicts already extracted by C#. **The split:** C# handles everything that requires the Revit API; `nec_rules.py` handles everything that is just math on data already in Python.
 
 ## Tool status
 
@@ -78,7 +81,7 @@ Live .rvt model
 | `list_panels` | Returns all electrical panels (distribution equipment) — call this first to discover panel names | Done |
 | `check_breaker_sizing(panel)` | Returns circuits on a panel with load + breaker data; Claude applies NEC 210.20(A) | Done |
 | `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Done (Step 9) |
-| `check_code_compliance` | NEC 2023 compliance via RAG | Step 10 |
+| `check_breaker_compliance(panel)` | NEC 210.20(A) breaker sizing compliance — deterministic Python rules, circuit-by-circuit report | Done (Step 10) |
 
 ## C# add-in file structure
 
@@ -98,7 +101,9 @@ Reading order (the order Revit itself processes them):
 
 ## Adding a new tool
 
-Every new tool requires touching four places in this order:
+**Does the tool need new data from Revit?** If yes, touch all four places below. If no (it applies rules to data an existing WebSocket command already returns), skip straight to step 4 and add rule logic to `nec_rules.py` — no C# required.
+
+Every tool that needs new Revit data requires touching four places in this order:
 
 1. **New `XxxHandler.cs`** — implement `IExternalEventHandler`. Add shared-state properties (request params + `TaskCompletionSource<string>`), do the Revit API work in `Execute()`, call `Tcs.SetResult(json)` when done.
 2. **`App.cs`** — in `OnStartup`, construct the handler + `ExternalEvent.Create(handler)`, pass both to `WebSocketServer`.
@@ -150,20 +155,49 @@ Every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()
 
 **Interaction design:** `fix_breaker_size` must only be called after user confirmation. This is enforced through the tool docstring (which the LLM sees), not code.
 
+## `nec_rules.py` — NEC rule engine
+
+Pure Python, no external dependencies. Two public symbols:
+
+- **`STANDARD_SIZES`** — NEC 240.6(A) list `[15, 20, 25, ..., 200]`. Single source of truth; `next_standard_size` and the tool docstrings both reference this.
+- **`next_standard_size(amps: float) -> int`** — returns the smallest standard size `>= amps`. Exact matches are not rounded up (e.g. `20.0 → 20`, not `25`).
+- **`check_circuit(circuit: dict) -> dict`** — three-path dispatch:
+  - `is_spare == True` → `status: "spare"`, no NEC article applied
+  - `load_classification in {"Motor", "HVAC"}` → `status: "manual_review"`, `nec_ref: "NEC 430/440"`
+  - everything else → NEC 210.20(A): `load_amps * 1.25` → `next_standard_size` → compare to `breaker_rating`
+
+### Compliance result dict schema
+
+Every `check_circuit` result contains:
+
+| Field | Type | Note |
+|---|---|---|
+| `status` | str | `"pass"`, `"fail"`, `"spare"`, `"manual_review"` |
+| `circuit_number` | str | From input |
+| `panel` | str | From input |
+| `load_classification` | str | From input |
+| `actual_rating` | int | Current breaker in Revit model |
+| `is_non_standard` | bool | `actual_rating` not in `STANDARD_SIZES` — data quality flag, separate from safety |
+| `load_amps` | float\|None | `apparent_load_va / (voltage * phase_factor)`; null for spare/motor |
+| `required_amps` | float\|None | `load_amps * 1.25` before rounding; null for spare/motor |
+| `required_rating` | int\|None | `next_standard_size(required_amps)`; null for spare/motor |
+| `is_oversized` | bool | `actual_rating > required_rating` — protected but larger than needed |
+| `nec_ref` | str\|None | Article string Claude quotes verbatim, e.g. `"NEC 210.20(A)"` |
+| `reason` | str | Full plain-English sentence; Claude can quote or paraphrase |
+
+`check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures.
+
 ## Planned features
 
-### Step 10 — NEC 2023 code compliance (`check_code_compliance`) — RAG
-
-- **Corpus**: NEC 2023 PDF → chunked text → vector embeddings stored locally (ChromaDB)
-- **Flow**: user asks → retrieve relevant NEC sections → Claude reasons over sections + live model data → cites specific article numbers
-- **Python stack**: `sentence-transformers` or OpenAI embeddings; `chromadb` for local vector store; retrieval in `main.py`
-- **Future**: user-selectable NEC edition, ASHRAE 90.1, LEED electrical credits
+- **Additional NEC rules** — conductor sizing (NEC 310), service entrance (NEC 230), GFCI/AFCI requirements — each as a new function in `nec_rules.py` + a new `@mcp.tool()` in `main.py`. No C# required.
+- **User-selectable code edition** — NEC 2020 vs. 2023 differ in arc-fault requirements; parameterise the rule set.
+- **ASHRAE 90.1 lighting power density checks** — would require a new C# handler to query lighting fixture loads by space type.
 
 ## Package manager
 
 This project uses `uv` (not pip). Always use `uv add <package>` to add dependencies; `uv sync` to install from the lock file. The lock file (`uv.lock`) is committed and should stay in sync.
 
-Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]` (FastMCP + CLI tooling) and `websockets` (async WebSocket client). Everything else is transitive. Step 10 will add `chromadb` and an embeddings library.
+Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]` (FastMCP + CLI tooling) and `websockets` (async WebSocket client). Everything else is transitive. `nec_rules.py` has no dependencies — it is pure Python stdlib.
 
 ## Reference documents
 

@@ -1,6 +1,7 @@
 import json
 import websockets
 from mcp.server.fastmcp import FastMCP
+from nec_rules import check_circuit
 
 mcp = FastMCP("revit-elec-mcp")
 
@@ -90,6 +91,54 @@ async def list_panels() -> str:
     Call this before check_breaker_sizing to discover panel names.
     Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
     return await _send({"command": "list_panels"})
+
+
+@mcp.tool()
+async def check_breaker_compliance(panel: str) -> str:
+    """Return a circuit-by-circuit NEC compliance report for a named panel.
+
+    Rules are applied by Python code (not by Claude), so results are deterministic:
+    the same load always produces the same required breaker rating.
+
+    Each entry in the returned 'circuits' list has:
+      status           — "pass", "fail", "spare", or "manual_review"
+      circuit_number   — string, e.g. "3"
+      panel            — panel name
+      load_amps        — actual load current in amperes (null for spare/motor)
+      required_amps    — 125% of load_amps before rounding (null for spare/motor)
+      required_rating  — smallest standard breaker size that satisfies NEC 210.20(A)
+      actual_rating    — current breaker rating in the Revit model
+      is_oversized     — true if actual_rating > required_rating (protected but larger than needed)
+      is_non_standard  — true if actual_rating is not a standard size per NEC 240.6(A)
+      nec_ref          — article cited, e.g. "NEC 210.20(A)" or "NEC 430/440"
+      reason           — one-sentence plain-English explanation of the result
+
+    The 'summary' object gives counts so you can lead with the headline before detailing failures.
+
+    Call list_panels first to discover panel names.
+    Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
+
+    raw = await _send({"command": "get_circuits", "panel": panel})
+
+    # _send returns a JSON string. If the add-in returned an error object, surface it
+    # directly rather than trying to apply NEC rules to an error message.
+    data = json.loads(raw)
+    if isinstance(data, dict) and "error" in data:
+        return raw
+
+    results = [check_circuit(c) for c in data]
+
+    # Count each status so Claude can open with "3 circuits fail, 1 needs manual review"
+    # without having to scan the full list itself.
+    summary = {
+        "total":         len(results),
+        "pass":          sum(1 for r in results if r["status"] == "pass"),
+        "fail":          sum(1 for r in results if r["status"] == "fail"),
+        "manual_review": sum(1 for r in results if r["status"] == "manual_review"),
+        "spare":         sum(1 for r in results if r["status"] == "spare"),
+    }
+
+    return json.dumps({"panel": panel, "summary": summary, "circuits": results})
 
 
 if __name__ == "__main__":
