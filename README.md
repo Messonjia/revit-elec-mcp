@@ -22,6 +22,7 @@ Claude Desktop
     │  JSON-RPC over stdio
     ▼
 main.py  (Python, runs outside Revit)
+    ├── nec_rules.py  (pure Python NEC logic — no Revit, no WebSocket)
     │  WebSocket  →  ws://localhost:8765
     ▼
 revit_addin/  (C# IExternalApplication, loaded by Revit at startup)
@@ -36,19 +37,21 @@ which is Revit's sanctioned way to post work back to the UI thread.
 
 ## Tools
 
-| Tool | Description | Status |
-|---|---|---|
-| `ping` | Verify the MCP server is reachable | Done |
-| `query_elements` | Return all electrical fixtures from the live model | Done |
-| `check_breaker_sizing` | Return circuits on a panel with load + breaker data; Claude checks NEC 210.20(A) sizing | Done |
-| `fix_breaker_size` | Write a corrected breaker rating back to Revit (agentic, confirms before writing) | Step 9 |
+| Tool | Description |
+|---|---|
+| `ping` | Verify the MCP server is reachable |
+| `list_panels` | Return all electrical panels — call this first to discover panel names |
+| `query_elements` | Return all electrical fixtures from the live model |
+| `check_breaker_sizing` | Return raw circuit data for a panel (load, voltage, breaker rating per circuit) |
+| `fix_breaker_size` | Write a corrected breaker rating back to Revit — agentic, requires user confirmation |
+| `check_breaker_compliance` | Apply NEC 210.20(A) rules in Python and return a circuit-by-circuit compliance report |
 
 ## Current state
 
-- Full read stack working end-to-end: Claude Desktop → MCP server → WebSocket → C# add-in → live Revit model
-- `check_breaker_sizing` returns circuit load, voltage, poles, breaker rating, and load classification per circuit
-- Motor/HVAC loads reported as "manual review required" — NEC 430/440 rules not yet implemented
-- Write capability (Step 9) not yet built — agentic breaker fix coming next
+- Full read/write stack working end-to-end: Claude Desktop → MCP server → WebSocket → C# add-in → live Revit model
+- `check_breaker_compliance` applies NEC 210.20(A) as deterministic Python code and returns a structured report — pass/fail/spare/manual_review per circuit with NEC article citations
+- `fix_breaker_size` writes corrected breaker ratings back to Revit inside a Transaction (undoable with Ctrl+Z)
+- Motor/HVAC circuits flagged for manual review — NEC 430/440 sizing rules not yet encoded
 
 ## Stack
 
