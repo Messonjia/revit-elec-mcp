@@ -85,9 +85,15 @@ Live .rvt model
 | `ping` | Verify the MCP server is reachable | Done |
 | `query_elements` | Returns electrical fixtures (id + name) from live Revit model | Done |
 | `list_panels` | Returns all electrical panels (distribution equipment) — call this first to discover panel names | Done |
-| `check_breaker_sizing(panel)` | Returns circuits on a panel with load + breaker data; Claude applies NEC 210.20(A) | Done |
+| `check_breaker_sizing(panel)` | Returns raw circuit data; Claude applies NEC 210.20(A) inline | Done |
 | `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Done (Step 9) |
 | `check_breaker_compliance(panel)` | NEC 210.20(A) breaker sizing compliance — deterministic Python rules, circuit-by-circuit report | Done (Step 10) |
+
+## Tool workflow
+
+`list_panels` → `check_breaker_compliance(panel)` is the primary compliance workflow. `check_breaker_compliance` calls `check_circuit()` in `nec_rules.py` — the result is deterministic Python, not Claude inference.
+
+`check_breaker_sizing` exists as a parallel "raw data" tool: it returns the same circuit data but instructs Claude to apply NEC rules inline. Use it for ad-hoc investigation; use `check_breaker_compliance` for structured reports. They both issue `get_circuits` to the C# add-in — only the Python post-processing differs.
 
 ## C# add-in file structure
 
@@ -101,9 +107,9 @@ Reading order (the order Revit itself processes them):
 3. `App.cs` — `IExternalApplication` entry point. `OnStartup` creates all handlers and `ExternalEvent` objects on the UI thread, then fires `WebSocketServer.StartAsync()` on a background thread via `Task.Run`. `OnShutdown` calls `Stop()`.
 4. `ElementQueryHandler.cs` — `IExternalEventHandler` for `get_elements`. Queries `OST_ElectricalFixtures` (receptacles, luminaires, HRU connections — devices wired *to* circuits, not the panels themselves), returns `id` + `name` per fixture.
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
-6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — not fixtures), returns `id` + `name`.
+6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — distribution equipment that *has* circuit spaces). Contrast with `OST_ElectricalFixtures` (used by `ElementQueryHandler`), which covers the *devices connected to* those circuits. Returns `id` + `name`.
 7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
-8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Known footgun:** the receive buffer is 4096 bytes — responses larger than this are silently truncated at the byte boundary, producing unparseable JSON. A panel with ~40+ circuits will exceed this. If adding a new handler that could return large datasets, increase `buffer` in `HandleConnectionAsync` or implement chunked reads.
+8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Known footgun:** the receive buffer is 4096 bytes — responses larger than this are silently truncated at the byte boundary, producing unparseable JSON. A panel with ~40+ circuits will exceed this. Fix: increase `buffer` at `HandleConnectionAsync` line 78 in `WebSocketServer.cs`, or implement chunked reads.
 
 ## Adding a new tool
 
@@ -143,11 +149,11 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `id` | `ElementId.Value` | Pass to `fix_breaker_size` |
 | `circuit_number` | `ElectricalSystem.CircuitNumber` | String, e.g. `"3"` |
 | `panel` | `ElectricalSystem.PanelName` | String |
-| `apparent_load_va` | `ElectricalSystem.ApparentLoad` | VA, internal Revit units |
-| `voltage` | `ElectricalSystem.Voltage` | Volts |
+| `apparent_load_va` | `ElectricalSystem.ApparentLoad` | VA, converted via `ConvertFromInternalUnits` |
+| `voltage` | `ElectricalSystem.Voltage` | Volts, converted via `ConvertFromInternalUnits` |
 | `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
-| `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `get_Parameter` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
-| `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | String; drives NEC rule selection |
+| `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
+| `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Stored as `ElementId` reference, not a plain string — must call `doc.GetElement(param.AsElementId()).Name` to resolve it. `AsString()` always returns null for this parameter. |
 
 **NEC rule routing by `load_classification`:**
 - `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
@@ -203,7 +209,7 @@ Every `check_circuit` result contains:
 
 This project uses `uv` (not pip). Always use `uv add <package>` to add dependencies; `uv sync` to install from the lock file. The lock file (`uv.lock`) is committed and should stay in sync.
 
-Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]` (FastMCP + CLI tooling) and `websockets` (async WebSocket client). Everything else is transitive. `nec_rules.py` has no dependencies — it is pure Python stdlib.
+Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP + CLI tooling) and `websockets>=16.0` (async WebSocket client). Everything else is transitive. `nec_rules.py` has no dependencies — it is pure Python stdlib.
 
 ## Reference documents
 
