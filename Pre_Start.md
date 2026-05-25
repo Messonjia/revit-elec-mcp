@@ -809,150 +809,7 @@ what it's best at.
 
 ---
 
-## Step 11 — Choose one: Clash Detection or Schedule Export
-
-This step is a branch. Read both options below, then pick one. They are approximately
-equal in difficulty. The choice should be driven by what you want to *learn* from the
-Revit API, not by what's more useful — both are useful.
-
----
-
-### Option A — Clash Detection
-
-**Goal:** a new MCP tool `detect_clashes(category_a, category_b)` that finds pairs of
-elements from two Revit categories whose geometry physically intersects. The typical
-electrical use case: check conduit against structural framing to catch routing conflicts
-before construction.
-
-**What the agent gains:** instead of you manually running Revit's Interference Check and
-reading a report, Claude can ask the model directly — "are there any clashes between
-electrical conduit and structural beams?" — get back a list of element ID pairs, look up
-each element's name and location, and describe the conflicts in plain language.
-
----
-
-#### Step 11A.1 — Read, don't build yet (alone, ~45 min)
-
-Two new concepts.
-
----
-
-**Concept 1 — `Document.CheckInterference()`: the built-in clash engine**
-
-Revit has a built-in interference checker — the same engine that Navisworks uses when
-connected to a live model. The Revit API exposes it directly:
-
-```csharp
-var options = new InterferenceCheckOptions();
-var result  = doc.CheckInterference(elementsA, elementsB, options);
-```
-
-`elementsA` and `elementsB` are `ICollection<ElementId>` — you collect each set with
-`FilteredElementCollector` first, then pass the ID lists. The result is an
-`InterferenceCheckResult` object. You iterate it with `GetInterferenceCheckResultIterator()`;
-each item exposes `EntityIdA` and `EntityIdB` — the two elements that clash.
-
-Important: this is a *pairwise* check. Every element in set A is checked against every
-element in set B. Checking A against A (e.g., conduit against conduit) requires passing
-the same collector twice — Revit won't deduplicate pairs for you.
-
-This lives in `Autodesk.Revit.DB` — no new namespace import beyond what you already use.
-
----
-
-**Concept 2 — Geometry vs. bounding box: why `CheckInterference` is the right tool**
-
-You might wonder: couldn't I just compare bounding boxes? If two bounding boxes overlap,
-the elements might clash. The answer is: bounding boxes are fast but produce many false
-positives. A vertical conduit and a horizontal beam might have overlapping bounding boxes
-but never actually touch.
-
-`Document.CheckInterference()` uses actual solid geometry — it checks whether the 3D
-solids of two elements truly intersect. This is slower (especially on large models) but
-accurate. The same reason Navisworks uses it.
-
-The alternative — extracting `Solid` objects manually and calling
-`BooleanOperationsUtils.ExecuteBooleanOperation()` — gives you the same accuracy but
-requires you to handle geometry extraction yourself (some elements have multiple solids,
-some have no solid geometry at all). `CheckInterference` handles all of that for you.
-
-**Known footgun:** the 4096-byte receive buffer in `WebSocketServer.cs` (line 78).
-A complex model could return hundreds of clash pairs. This is the step where that
-buffer limit will actually bite you. Before testing on a real model with many elements,
-increase `buffer` to at least 65536 — or implement chunked reads.
-
-After reading, you should be able to answer:
-- Why is `CheckInterference` more accurate than a bounding box comparison?
-- What do `EntityIdA` and `EntityIdB` tell you, and what don't they tell you?
-  (Hint: you get IDs, not locations or names — what additional API call would you need
-  to turn an ID into something a user can act on?)
-
----
-
-#### Step 11A.2 — Design the tool interface (alone, ~20 min)
-
-Before any code, decide what the tool's parameters should be. This is a design question,
-not a code question — and getting it wrong means the tool is awkward to call.
-
-The tool needs to know which two categories of elements to check against each other.
-Three possible approaches:
-
-**A — Fixed categories, hardcoded.**
-`detect_clashes()` always checks `OST_Conduits` against `OST_StructuralFraming`.
-Simple, but useless for any other combination.
-
-**B — String parameters for category names.**
-`detect_clashes(category_a: str, category_b: str)` where the caller passes Revit
-category names like `"OST_Conduits"` and `"OST_StructuralFraming"`.
-Flexible, but requires Claude (or the user) to know exact `BuiltInCategory` enum names.
-
-**C — Curated enum-style strings.**
-`detect_clashes(category_a: str, category_b: str)` where the tool description lists
-the valid values: `"conduit"`, `"cable_tray"`, `"structural_framing"`, `"duct"`, `"pipe"`.
-The C# handler maps these friendly names to `BuiltInCategory` values internally.
-Claude can pick from the list; the user doesn't need to know Revit internals.
-
-Approach C is the right one for MCP tools that an LLM calls. The docstring is the
-interface contract — it should make the right call obvious and wrong calls impossible.
-
-Write out the docstring for the Python tool before your Claude Code session. The session
-goes better when you know exactly what you want the tool to say.
-
----
-
-#### Step 11A.3 — Build it (Claude Code, teaching mode, ~2 hours)
-
-Four files to touch, same pattern as every other tool:
-
-1. **`ClashDetectionHandler.cs`** — new `IExternalEventHandler`. Reads `CategoryA` and
-   `CategoryB` from shared state, runs two `FilteredElementCollector` queries, calls
-   `doc.CheckInterference()`, iterates results, returns a JSON array of
-   `{element_id_a, name_a, element_id_b, name_b}` pairs. Resolve element names inside
-   `Execute()` while still on the UI thread — don't return bare IDs and force the Python
-   side to do another round-trip for names.
-
-2. **`App.cs`** — construct handler + `ExternalEvent.Create()` in `OnStartup`.
-
-3. **`WebSocketServer.cs`** — new `HandleClashDetectionAsync()` method, new arm in the
-   `command` switch for `"detect_clashes"`.
-
-4. **`main.py`** — new `@mcp.tool() async def detect_clashes(category_a: str, category_b: str)`
-   that calls `_send({"command": "detect_clashes", "category_a": ..., "category_b": ...})`.
-
-Start your session with:
-
-> Before writing any code, explain how `Document.CheckInterference()` works in the
-> Revit API. What are the inputs, what does the result look like, and how do I iterate
-> it? I'm building a handler that takes two element categories, finds clashes, and returns
-> JSON. Don't write code yet.
-
-**You'll know it worked when:** you open a model where you know two elements clash (or
-place two overlapping elements in a test model), call the tool from Claude Desktop, and
-get back a JSON list that includes those element IDs and names.
-
----
-
-### Option B — Schedule Export
+## Step 11 — Schedule Export
 
 **Goal:** a new MCP tool `export_schedule(schedule_name)` that reads an existing
 ViewSchedule from the Revit model and returns its rows as structured JSON. Practical
@@ -971,7 +828,7 @@ applied by this tool; the agent reasons over the raw table.
 
 ---
 
-#### Step 11B.1 — Read, don't build yet (alone, ~45 min)
+### Step 11.1 — Read, don't build yet (alone, ~45 min)
 
 Two new concepts.
 
@@ -1045,7 +902,7 @@ After reading, you should be able to answer:
 
 ---
 
-#### Step 11B.2 — Design the tool interface (alone, ~15 min)
+### Step 11.2 — Design the tool interface (alone, ~15 min)
 
 The tool needs to identify which schedule to export. Two approaches:
 
@@ -1063,7 +920,7 @@ the workflow self-contained.
 
 ---
 
-#### Step 11B.3 — Build it (Claude Code, teaching mode, ~2 hours)
+### Step 11.3 — Build it (Claude Code, teaching mode, ~2 hours)
 
 Six files to touch (two new tools = two handlers = two WebSocket arms):
 
@@ -1095,19 +952,3 @@ back the names of real schedules in your model, then call `export_schedule("Pane
 Schedule")` and get back a JSON table with column names and row data matching what you
 see in Revit's schedule view.
 
----
-
-### Choosing between A and B
-
-| | Clash Detection | Schedule Export |
-|---|---|---|
-| New Revit API concepts | `CheckInterference`, solid geometry | `ViewSchedule`, `TableData`, `SectionType` |
-| New architecture pieces | 1 handler, 1 event, 1 tool | 2 handlers, 2 events, 2 tools |
-| Buffer risk | High (many clashes = large response) | Medium (large schedules possible) |
-| Extends existing patterns | No — geometry is a new domain | Yes — `OfClass` instead of `OfCategory` |
-| What the agent can do with it | Detect routing conflicts, describe clash locations | Reason over tabular data, flag missing fields, draft summaries |
-| Electrical relevance | Coordination (conduit vs. structure/HVAC) | Documentation and review |
-
-Pick clash detection if you want to go deeper into Revit's geometry layer.
-Pick schedule export if you want to extend the data-extraction pattern into a new
-element type and get a tool that's immediately useful for documentation workflows.
