@@ -59,7 +59,7 @@ Then restart Claude Desktop. No automated tests exist — test tools manually by
 
 # Architecture
 
-## Current state (Steps 1–10 complete)
+## Current state
 
 ```
 Claude Desktop
@@ -153,7 +153,7 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `voltage` | `ElectricalSystem.Voltage` | Volts, converted via `ConvertFromInternalUnits` |
 | `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
 | `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
-| `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Stored as `ElementId` reference, not a plain string — must call `doc.GetElement(param.AsElementId()).Name` to resolve it. `AsString()` always returns null for this parameter. |
+| `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Usually stored as an `ElementId` reference — resolve with `doc.GetElement(param.AsElementId()).Name`. In some model configurations `StorageType` is `String` instead; the handler checks both. `AsString()` is not reliable alone. |
 
 **NEC rule routing by `load_classification`:**
 - `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
