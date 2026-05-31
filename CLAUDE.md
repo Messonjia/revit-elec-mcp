@@ -109,7 +109,7 @@ Reading order (the order Revit itself processes them):
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
 6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — distribution equipment that *has* circuit spaces). Contrast with `OST_ElectricalFixtures` (used by `ElementQueryHandler`), which covers the *devices connected to* those circuits. Returns `id` + `name`.
 7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
-8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Known footgun:** the receive buffer is 4096 bytes — responses larger than this are silently truncated at the byte boundary, producing unparseable JSON. A panel with ~40+ circuits will exceed this. Fix: increase `buffer` at `HandleConnectionAsync` line 78 in `WebSocketServer.cs`, or implement chunked reads.
+8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Receive loop:** `HandleConnectionAsync` accumulates WebSocket frames into a `MemoryStream` until `EndOfMessage` is true — 4096 bytes is the chunk size, not the message size limit. This handles panels with 80+ circuits without truncation.
 
 ## Adding a new tool
 
@@ -213,6 +213,5 @@ Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP
 
 ## Reference documents
 
-- `Pre_Start.md` — step-by-step roadmap (Steps 1–9) with concept explanations and learning notes
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
 - `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)

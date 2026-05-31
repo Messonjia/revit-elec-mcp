@@ -51,6 +51,7 @@ which is Revit's sanctioned way to post work back to the UI thread.
 - Full read/write stack working end-to-end: Claude Desktop → MCP server → WebSocket → C# add-in → live Revit model
 - `check_breaker_compliance` applies NEC 210.20(A) as deterministic Python code and returns a structured report — pass/fail/spare/manual_review per circuit with NEC article citations
 - `fix_breaker_size` writes corrected breaker ratings back to Revit inside a Transaction (undoable with Ctrl+Z)
+- WebSocket receive uses a chunked read loop — handles panels with 80+ circuits without truncation
 - Motor/HVAC circuits flagged for manual review — NEC 430/440 sizing rules not yet encoded
 
 ## Stack

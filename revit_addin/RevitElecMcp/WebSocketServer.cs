@@ -75,12 +75,17 @@ public class WebSocketServer
 
     private async Task HandleConnectionAsync(WebSocket ws)
     {
-        var buffer   = new byte[4096];
-        // ReceiveAsync returns a result object — Count tells us how many bytes actually arrived.
-        // Previously we ignored this and passed the whole buffer to handlers, which included
-        // trailing zero bytes. GetString with the correct count fixes that.
-        var received = await ws.ReceiveAsync(buffer, CancellationToken.None);
-        var message  = Encoding.UTF8.GetString(buffer, 0, received.Count);
+        // 4096 is the chunk size, not the max message size — we loop until EndOfMessage is true,
+        // accumulating chunks into a MemoryStream. Handles panels with 80+ circuits cleanly.
+        var buffer = new byte[4096];
+        using var ms = new MemoryStream();
+        WebSocketReceiveResult received;
+        do
+        {
+            received = await ws.ReceiveAsync(buffer, CancellationToken.None);
+            ms.Write(buffer, 0, received.Count);
+        } while (!received.EndOfMessage);
+        var message = Encoding.UTF8.GetString(ms.ToArray());
 
         string json;
         try
