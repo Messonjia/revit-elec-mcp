@@ -201,6 +201,7 @@ Every `check_circuit` result contains:
 
 ## Planned features
 
+- **Schedule Export (Step 11)** — `list_schedules()` + `export_schedule(schedule_name)` tools. C# side: `ScheduleListHandler` uses `OfClass(typeof(ViewSchedule))` (not `OfCategory`); `ScheduleExportHandler` reads `GetTableData()` → `GetSectionData(SectionType.Header/Body)` → `GetCellText(row, col)`. Key quirk: `GetCellText()` always returns a formatted string (e.g. `"20 A"`, not `20.0`) and throws on out-of-range indices — guard with `NumberOfRows`/`NumberOfColumns`. Return shape: `{"schedule_name": ..., "columns": [...], "rows": [[...], ...]}`. Requires 4-file wiring (new handlers, App.cs, WebSocketServer.cs, main.py).
 - **Additional NEC rules** — conductor sizing (NEC 310), service entrance (NEC 230), GFCI/AFCI requirements — each as a new function in `nec_rules.py` + a new `@mcp.tool()` in `main.py`. No C# required.
 - **User-selectable code edition** — NEC 2020 vs. 2023 differ in arc-fault requirements; parameterise the rule set.
 - **ASHRAE 90.1 lighting power density checks** — would require a new C# handler to query lighting fixture loads by space type.
@@ -213,5 +214,7 @@ Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP
 
 ## Reference documents
 
+- `Pre_Start.md` — step-by-step learning guide (Steps 1–11) with teaching notes, concept explanations, and "you'll know it worked when" checks. Contains the full design spec for Step 11 (Schedule Export). Read this for the rationale behind architectural decisions.
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
 - `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)
+- `AGENTS.md` — near-identical copy of this file for Codex agents. Keep in sync when updating CLAUDE.md.
