@@ -19,6 +19,8 @@ I'm building this Revit MCP server partly to learn. Default to teaching mode:
 6. If I'm about to do something that won't scale or has a known footgun, 
    tell me before doing it, not after.
 
+> **Keep `AGENTS.md` in sync** — it is a near-identical copy of this file for Codex agents. Update it whenever this file changes.
+
 # Commands
 
 **Python MCP server setup (one-time):**
@@ -37,6 +39,11 @@ Requires Python 3.12 (pinned in `.python-version`; `uv` manages this automatical
 uv run mcp dev main.py
 ```
 Note: tools that call `_send` will fail unless Revit is also open — `ping` works standalone.
+
+**Smoke-test the NEC rule engine without Revit (pure Python, no dependencies):**
+```powershell
+.venv\Scripts\python.exe -c "from nec_rules import check_circuit; print(check_circuit({'circuit_number':'1','panel':'P1','apparent_load_va':1800,'voltage':120,'poles':1,'breaker_rating':15,'load_classification':'Lighting','is_spare':False}))"
+```
 
 **Build the C# Revit add-in:**
 ```powershell
@@ -98,7 +105,7 @@ Live .rvt model
 ## C# add-in file structure
 
 Reading order (the order Revit itself processes them):
-1. `RevitElecMcp.addin` — the only file Revit reads directly. Key fields:
+1. `RevitElecMcp.addin` (`revit_addin\RevitElecMcp\RevitElecMcp.addin`) — the only file Revit reads directly. Key fields:
    - `Type="Application"` — loads at Revit startup, no user button required
    - `Assembly` — bare filename (`RevitElecMcp.dll`); works because both files land in the same Addins folder
    - `FullClassName` — `RevitElecMcp.App`; must match namespace + class exactly (Revit uses reflection)
@@ -193,7 +200,7 @@ Every `check_circuit` result contains:
 | `load_amps` | float\|None | `apparent_load_va / (voltage * phase_factor)`; null for spare/motor |
 | `required_amps` | float\|None | `load_amps * 1.25` before rounding; null for spare/motor |
 | `required_rating` | int\|None | `next_standard_size(required_amps)`; null for spare/motor |
-| `is_oversized` | bool | `actual_rating > required_rating` — protected but larger than needed |
+| `is_oversized` | bool | `actual_rating > required_rating` — protected but larger than needed; status is still `"pass"` |
 | `nec_ref` | str\|None | Article string Claude quotes verbatim, e.g. `"NEC 210.20(A)"` |
 | `reason` | str | Full plain-English sentence; Claude can quote or paraphrase |
 
@@ -201,7 +208,7 @@ Every `check_circuit` result contains:
 
 ## Planned features
 
-- **Schedule Export (Step 11)** — `list_schedules()` + `export_schedule(schedule_name)` tools. C# side: `ScheduleListHandler` uses `OfClass(typeof(ViewSchedule))` (not `OfCategory`); `ScheduleExportHandler` reads `GetTableData()` → `GetSectionData(SectionType.Header/Body)` → `GetCellText(row, col)`. Key quirk: `GetCellText()` always returns a formatted string (e.g. `"20 A"`, not `20.0`) and throws on out-of-range indices — guard with `NumberOfRows`/`NumberOfColumns`. Return shape: `{"schedule_name": ..., "columns": [...], "rows": [[...], ...]}`. Requires 4-file wiring (new handlers, App.cs, WebSocketServer.cs, main.py).
+- **Schedule Export (Step 11) — Next** — `list_schedules()` + `export_schedule(schedule_name)` tools. C# side: `ScheduleListHandler` uses `OfClass(typeof(ViewSchedule))` (not `OfCategory`); `ScheduleExportHandler` reads `GetTableData()` → `GetSectionData(SectionType.Header/Body)` → `GetCellText(row, col)`. Key quirk: `GetCellText()` always returns a formatted string (e.g. `"20 A"`, not `20.0`) and throws on out-of-range indices — guard with `NumberOfRows`/`NumberOfColumns`. Return shape: `{"schedule_name": ..., "columns": [...], "rows": [[...], ...]}`. Requires 4-file wiring (new handlers, App.cs, WebSocketServer.cs, main.py).
 - **Additional NEC rules** — conductor sizing (NEC 310), service entrance (NEC 230), GFCI/AFCI requirements — each as a new function in `nec_rules.py` + a new `@mcp.tool()` in `main.py`. No C# required.
 - **User-selectable code edition** — NEC 2020 vs. 2023 differ in arc-fault requirements; parameterise the rule set.
 - **ASHRAE 90.1 lighting power density checks** — would require a new C# handler to query lighting fixture loads by space type.
@@ -217,4 +224,4 @@ Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP
 - `Pre_Start.md` — step-by-step learning guide (Steps 1–11) with teaching notes, concept explanations, and "you'll know it worked when" checks. Contains the full design spec for Step 11 (Schedule Export). Read this for the rationale behind architectural decisions.
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
 - `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)
-- `AGENTS.md` — near-identical copy of this file for Codex agents. Keep in sync when updating CLAUDE.md.
+- `AGENTS.md` — near-identical copy of this file for Codex agents (see sync note at top).
