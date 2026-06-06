@@ -72,8 +72,10 @@ async def fix_breaker_size(circuit_id: int, new_rating: int) -> str:
     """WRITES TO THE REVIT MODEL. Set the breaker rating for a single circuit.
 
     circuit_id — the integer element ID returned by check_breaker_sizing
-    new_rating — new breaker size in amperes; must be a standard size:
-                 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200
+    new_rating — new breaker size in amperes; must be a standard size per NEC 240.6(A):
+                 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200,
+                 225, 250, 300, 350, 400, 450, 500, 600, 700, 800, 1000, 1200, 1600, 2000,
+                 2500, 3000, 4000, 5000, 6000
 
     IMPORTANT: This immediately modifies the live Revit model. Only call this tool
     after explaining the proposed change to the user and receiving explicit confirmation.

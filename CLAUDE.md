@@ -124,7 +124,7 @@ Reading order (the order Revit itself processes them):
 
 Every tool that needs new Revit data requires touching four places in this order:
 
-1. **New `XxxHandler.cs`** — implement `IExternalEventHandler`. Add shared-state properties (request params + `TaskCompletionSource<string>`), do the Revit API work in `Execute()`, call `Tcs.SetResult(json)` when done.
+1. **New `XxxHandler.cs`** — implement `IExternalEventHandler`. Add shared-state properties (request params + `TaskCompletionSource<string>`), do the Revit API work in `Execute()`, call `Tcs.SetResult(json)` when done. Also implement `GetName() => "RevitElecMcp.XxxHandler"` — Revit writes this to the journal file and shows it in Add-In Manager diagnostics. **Error convention:** always call `Tcs.SetResult(JsonSerializer.Serialize(new { error = "..." }))`, never `Tcs.SetException()` — the WebSocket server expects a string it can send back, not an exception to propagate.
 2. **`App.cs`** — in `OnStartup`, construct the handler + `ExternalEvent.Create(handler)`, pass both to `WebSocketServer`.
 3. **`WebSocketServer.cs`** — add a `Handle*Async()` method following the same TCS pattern, add an arm to the `command` switch, and update the constructor signature to accept the new handler and event.
 4. **`main.py`** — add an `@mcp.tool()` async function that calls `_send({"command": "xxx", ...})`. The function name → tool name, docstring → what the LLM sees, type annotations → JSON schema. All tools that touch Revit must be `async def`; `ping` is the only synchronous tool because it never calls `_send`.
@@ -153,7 +153,7 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 
 | Field | Source | Note |
 |---|---|---|
-| `id` | `ElementId.Value` | Pass to `fix_breaker_size` |
+| `id` | `ElementId.Value` | `long` (int64) in Revit 2024+ — `IntegerValue` is deprecated. Pass to `fix_breaker_size`. Python `int` handles it transparently. |
 | `circuit_number` | `ElectricalSystem.CircuitNumber` | String, e.g. `"3"` |
 | `panel` | `ElectricalSystem.PanelName` | String |
 | `apparent_load_va` | `ElectricalSystem.ApparentLoad` | VA, converted via `ConvertFromInternalUnits` |
@@ -161,6 +161,8 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
 | `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
 | `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Usually stored as an `ElementId` reference — resolve with `doc.GetElement(param.AsElementId()).Name`. In some model configurations `StorageType` is `String` instead; the handler checks both. `AsString()` is not reliable alone. |
+
+**`PanelName` filter:** if `PanelName` is `null`, `CircuitQueryHandler` returns every circuit in the model (no panel filter). No Python tool currently exposes this, but it is available to future tools by passing `"panel": null` (or omitting the key with a null-coalescing read on the C# side).
 
 **NEC rule routing by `load_classification`:**
 - `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
@@ -178,7 +180,7 @@ Every Revit write must be wrapped in `new Transaction(doc, "name")` → `Start()
 
 Pure Python, no external dependencies. Three public symbols (plus `MOTOR_LOAD_TYPES`, which is module-level but not imported by `main.py`):
 
-- **`STANDARD_SIZES`** — NEC 240.6(A) list `[15, 20, 25, ..., 200]`. Single source of truth; `next_standard_size` and the tool docstrings both reference this.
+- **`STANDARD_SIZES`** — NEC 240.6(A) full list, 15A through 6000A. Single source of truth; `next_standard_size` and the tool docstrings both reference this.
 - **`next_standard_size(amps: float) -> int`** — returns the smallest standard size `>= amps`. Exact matches are not rounded up (e.g. `20.0 → 20`, not `25`).
 - **`check_circuit(circuit: dict) -> dict`** — three-path dispatch:
   - `is_spare == True` → `status: "spare"`, no NEC article applied
@@ -204,7 +206,7 @@ Every `check_circuit` result contains:
 | `nec_ref` | str\|None | Article string Claude quotes verbatim, e.g. `"NEC 210.20(A)"` |
 | `reason` | str | Full plain-English sentence; Claude can quote or paraphrase |
 
-`check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures.
+`check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures. If `_send` returns an error object (e.g. Revit not open), `check_breaker_compliance` detects `isinstance(data, dict) and "error" in data` and surfaces it directly without attempting to apply NEC rules.
 
 ## Planned features
 

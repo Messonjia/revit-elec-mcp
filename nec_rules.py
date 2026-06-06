@@ -4,7 +4,11 @@
 
 # NEC 240.6(A) standard ampere ratings for fixed-trip breakers through 200A.
 # Values above 200A exist in the code but are uncommon in the panel types this tool targets.
-STANDARD_SIZES = [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200]
+STANDARD_SIZES = [
+    15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200,
+    225, 250, 300, 350, 400, 450, 500, 600, 700, 800, 1000, 1200, 1600, 2000,
+    2500, 3000, 4000, 5000, 6000,
+]
 
 # Load classifications that fall under NEC 430/440 — the 125% rule does NOT apply.
 # Motor starting inrush current intentionally allows larger breakers (up to 250% of FLC).
