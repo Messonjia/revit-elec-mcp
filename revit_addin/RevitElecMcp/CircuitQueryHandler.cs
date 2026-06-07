@@ -57,6 +57,24 @@ public class CircuitQueryHandler : IExternalEventHandler
                     else if (lcParam?.StorageType == StorageType.String)
                         lcName = lcParam.AsString() ?? "Unknown";
 
+                    // For motor/HVAC circuits only, look for HP on each connected element.
+                    // RBS_ELEC_MOTOR_SIZE stores horsepower as a dimensionless double in most
+                    // Revit equipment families. Null when absent — check_circuit falls back to
+                    // manual_review so the engineer can size it by hand.
+                    double? hp = null;
+                    if (lcName == "Motor" || lcName == "HVAC")
+                    {
+                        foreach (Element connectedEl in sys.Elements)
+                        {
+                            var hpParam = connectedEl.get_Parameter(BuiltInParameter.RBS_ELEC_MOTOR_SIZE);
+                            if (hpParam is { StorageType: StorageType.Double } && hpParam.AsDouble() > 0)
+                            {
+                                hp = hpParam.AsDouble();
+                                break; // take HP from the first element that has it
+                            }
+                        }
+                    }
+
                     return new
                     {
                         id                  = sys.Id.Value,
@@ -69,7 +87,8 @@ public class CircuitQueryHandler : IExternalEventHandler
                         is_spare            = sys.Elements.Size == 0,
                         breaker_rating      = sys.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_RATING_PARAM)
                                                ?.AsDouble() ?? 0,
-                        load_classification = lcName
+                        load_classification = lcName,
+                        hp                  = hp   // null if not a motor/HVAC circuit or HP not found
                     };
                 });
 

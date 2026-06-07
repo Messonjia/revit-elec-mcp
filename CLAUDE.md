@@ -162,11 +162,14 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
 | `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Usually stored as an `ElementId` reference — resolve with `doc.GetElement(param.AsElementId()).Name`. In some model configurations `StorageType` is `String` instead; the handler checks both. `AsString()` is not reliable alone. |
 
+| `hp` | `RBS_ELEC_MOTOR_SIZE` on connected element | HP as `double?`; `null` when not a motor/HVAC circuit or parameter absent. Only read for `Motor`/`HVAC` load classifications. |
+
 **`PanelName` filter:** if `PanelName` is `null`, `CircuitQueryHandler` returns every circuit in the model (no panel filter). No Python tool currently exposes this, but it is available to future tools by passing `"panel": null` (or omitting the key with a null-coalescing read on the C# side).
 
 **NEC rule routing by `load_classification`:**
 - `Lighting` / `Power` / `General` → NEC 210.20(A): breaker ≥ 125% of continuous load current
-- `Motor` / `HVAC` → NEC 430/440: do not apply 125% rule; report as "manual review required"
+- `Motor` / `HVAC` with `hp` present → NEC 430.52: breaker ≤ 250% of FLC (from NEC Table 430.248/430.250); fail if breaker exceeds this cap
+- `Motor` / `HVAC` with `hp` absent → `status: "manual_review"` — HP required to apply NEC 430.52
 
 ## Revit write pattern (implemented in BreakerFixHandler)
 
@@ -182,9 +185,14 @@ Pure Python, no external dependencies. Three public symbols (plus `MOTOR_LOAD_TY
 
 - **`STANDARD_SIZES`** — NEC 240.6(A) full list, 15A through 6000A. Single source of truth; `next_standard_size` and the tool docstrings both reference this.
 - **`next_standard_size(amps: float) -> int`** — returns the smallest standard size `>= amps`. Exact matches are not rounded up (e.g. `20.0 → 20`, not `25`).
-- **`check_circuit(circuit: dict) -> dict`** — three-path dispatch:
+- **`_FLC_1PH` / `_FLC_3PH`** — NEC Table 430.248 / 430.250 encoded as nested dicts `{hp: {voltage: flc_amps}}`. Private; accessed only through `_lookup_motor_flc`.
+- **`_snap_voltage(circuit_v, table_voltages)`** — returns the largest table voltage ≤ `circuit_v` (e.g. 480V → 460V column). Returns `None` if below all table entries.
+- **`_snap_hp(hp, table)`** — returns the closest HP key in the table (handles minor rounding artifacts from Revit).
+- **`_check_motor_circuit(circuit, base, hp)`** — NEC 430.52 path: looks up FLC from HP + voltage, computes 250% cap, compares to `breaker_rating`. For motors, `required_rating` is a **maximum** (not minimum); fail if `actual > required`.
+- **`check_circuit(circuit: dict) -> dict`** — four-path dispatch:
   - `is_spare == True` → `status: "spare"`, no NEC article applied
-  - `load_classification in {"Motor", "HVAC"}` → `status: "manual_review"`, `nec_ref: "NEC 430/440"`
+  - `load_classification in {"Motor", "HVAC"}` and `hp` present → `_check_motor_circuit()` → NEC 430.52
+  - `load_classification in {"Motor", "HVAC"}` and `hp` absent → `status: "manual_review"`
   - everything else → NEC 210.20(A): `load_amps * 1.25` → `next_standard_size` → compare to `breaker_rating`
 
 ### Compliance result dict schema
