@@ -188,6 +188,7 @@ Pure Python, no external dependencies. Three public symbols (plus `MOTOR_LOAD_TY
 - **`_FLC_1PH` / `_FLC_3PH`** — NEC Table 430.248 / 430.250 encoded as nested dicts `{hp: {voltage: flc_amps}}`. Private; accessed only through `_lookup_motor_flc`.
 - **`_snap_voltage(circuit_v, table_voltages)`** — returns the largest table voltage ≤ `circuit_v` (e.g. 480V → 460V column). Returns `None` if below all table entries.
 - **`_snap_hp(hp, table)`** — returns the closest HP key in the table (handles minor rounding artifacts from Revit).
+- **`_lookup_motor_flc(hp, voltage, poles)`** — wraps `_snap_hp` + `_snap_voltage` into one call. Returns `(flc, snapped_hp, snapped_v)` or `None` when voltage is below all table entries (e.g. a 100V system). `None` triggers `manual_review` even when HP is present. Selects `_FLC_1PH` when `poles == 1`, `_FLC_3PH` for everything else — a 2-pole 240V single-phase motor uses the three-phase table.
 - **`_check_motor_circuit(circuit, base, hp)`** — NEC 430.52 path: looks up FLC from HP + voltage, computes 250% cap, compares to `breaker_rating`. For motors, `required_rating` is a **maximum** (not minimum); fail if `actual > required`.
 - **`check_circuit(circuit: dict) -> dict`** — four-path dispatch:
   - `is_spare == True` → `status: "spare"`, no NEC article applied
@@ -208,13 +209,25 @@ Every `check_circuit` result contains:
 | `actual_rating` | int | Current breaker in Revit model |
 | `is_non_standard` | bool | `actual_rating` not in `STANDARD_SIZES` — data quality flag, separate from safety |
 | `load_amps` | float\|None | `apparent_load_va / (voltage * phase_factor)`; null for spare/motor |
-| `required_amps` | float\|None | `load_amps * 1.25` before rounding; null for spare/motor |
-| `required_rating` | int\|None | `next_standard_size(required_amps)`; null for spare/motor |
-| `is_oversized` | bool | `actual_rating > required_rating` — protected but larger than needed; status is still `"pass"` |
+| `required_amps` | float\|None | `load_amps * 1.25` for 210.20(A); `flc * 2.5` for 430.52; null for spare |
+| `required_rating` | int\|None | `next_standard_size(required_amps)` — minimum for 210.20(A), **maximum** for 430.52 |
+| `is_oversized` | bool | 210.20(A): `actual > required` — status still `"pass"`. Motor: always `False` — being too large is already a `"fail"`, not a flag |
+| `hp` | float\|None | Motor HP used for FLC lookup; `None` for non-motor circuits |
+| `flc_amps` | float\|None | Full-load current from NEC Table 430.248/430.250; `None` for non-motor circuits |
 | `nec_ref` | str\|None | Article string Claude quotes verbatim, e.g. `"NEC 210.20(A)"` |
 | `reason` | str | Full plain-English sentence; Claude can quote or paraphrase |
 
 `check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures. If `_send` returns an error object (e.g. Revit not open), `check_breaker_compliance` detects `isinstance(data, dict) and "error" in data` and surfaces it directly without attempting to apply NEC rules.
+
+## Non-obvious behaviors
+
+**ExternalEvent modal dialog constraint** — `Execute()` won't fire when Revit is showing any modal dialog (property editor, file dialog, or no-document state). `RaiseAndWaitAsync` hits its 5-second timeout and returns `"Timed out waiting for Revit"`. Close the dialog and retry — not a bug.
+
+**Port 8765 binding failure** — if something else holds port 8765 when Revit starts, `HttpListener.Start()` throws inside `Task.Run`, which silently swallows the exception. The add-in appears loaded but the WebSocket server never starts; the Python side always returns `"Could not connect to Revit"`. Diagnose with `netstat -an | findstr 8765`.
+
+**`poles` in NEC 210.20(A) path** — only `poles == 3` gets `phase_factor = 1.732`; `poles = 1` and `poles = 2` both use `1.0`. A 2-pole 240V single-phase circuit correctly computes `I = VA / (240 * 1.0)`. The same asymmetry applies in `_lookup_motor_flc`: `poles == 1` → `_FLC_1PH`, everything else → `_FLC_3PH`.
+
+**Zero-load circuits** — `apparent_load_va = 0` produces `load_amps = 0`, `required_rating = 15`. Any 15A breaker passes. Zero-load non-spare circuits likely have bad model data; `is_spare` (checked first via `sys.Elements.Size == 0`) catches the common case but not miscategorized circuits.
 
 ## Planned features
 
