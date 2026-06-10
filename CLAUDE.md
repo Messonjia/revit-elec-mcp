@@ -95,10 +95,14 @@ Live .rvt model
 | `check_breaker_sizing(panel)` | Returns raw circuit data; Claude applies NEC 210.20(A) inline | Done |
 | `fix_breaker_size(circuit_id, new_rating)` | Writes corrected breaker rating to Revit inside a Transaction (agentic) | Done (Step 9) |
 | `check_breaker_compliance(panel)` | NEC 210.20(A) breaker sizing compliance — deterministic Python rules, circuit-by-circuit report | Done (Step 10) |
+| `list_schedules()` | Returns all ViewSchedule names and ids in the model — call this first to discover schedule names | Done (Step 11) |
+| `export_schedule(schedule_name)` | Exports a named schedule as `{columns, rows}` — all values are pre-formatted strings as Revit displays them | Done (Step 11) |
 
 ## Tool workflow
 
 `list_panels` → `check_breaker_compliance(panel)` is the primary compliance workflow. `check_breaker_compliance` calls `check_circuit()` in `nec_rules.py` — the result is deterministic Python, not Claude inference.
+
+`list_schedules` → `export_schedule(schedule_name)` is the schedule export workflow. `export_schedule` returns whatever the engineer built in Revit — columns and data rows as formatted strings. Use this to read fields not exposed by `get_circuits` (conductor size, load names, demand factors, etc.).
 
 `check_breaker_sizing` exists as a parallel "raw data" tool: it returns the same circuit data but instructs Claude to apply NEC rules inline. Use it for ad-hoc investigation; use `check_breaker_compliance` for structured reports. They both issue `get_circuits` to the C# add-in — only the Python post-processing differs.
 
@@ -116,7 +120,9 @@ Reading order (the order Revit itself processes them):
 5. `CircuitQueryHandler.cs` — `IExternalEventHandler` for `get_circuits`. Queries `OST_ElectricalCircuit`, casts each to `ElectricalSystem` (in `Autodesk.Revit.DB.Electrical`), filters by `PanelName`, returns circuit data including `load_classification` for NEC rule routing. `is_spare` is derived by checking `sys.Elements.Size == 0`.
 6. `PanelQueryHandler.cs` — `IExternalEventHandler` for `list_panels`. Queries `OST_ElectricalEquipment` (panels, switchboards, MCCs — distribution equipment that *has* circuit spaces). Contrast with `OST_ElectricalFixtures` (used by `ElementQueryHandler`), which covers the *devices connected to* those circuits. Returns `id` + `name`.
 7. `BreakerFixHandler.cs` — `IExternalEventHandler` for `fix_breaker`. Accepts `CircuitId` + `NewRating` from shared state, resolves the element, wraps the `RBS_ELEC_CIRCUIT_RATING_PARAM` write in a `Transaction`. Uses `UnitUtils.ConvertToInternalUnits` before calling `param.Set()`.
-8. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Receive loop:** `HandleConnectionAsync` accumulates WebSocket frames into a `MemoryStream` until `EndOfMessage` is true — 4096 bytes is the chunk size, not the message size limit. This handles panels with 80+ circuits without truncation.
+8. `ScheduleListHandler.cs` — `IExternalEventHandler` for `list_schedules`. Uses `OfClass(typeof(ViewSchedule))` (not `OfCategory` — `ViewSchedule` is a `View` subclass, not a category-based element). Returns `id` + `name` per schedule, sorted alphabetically.
+9. `ScheduleExportHandler.cs` — `IExternalEventHandler` for `export_schedule`. Accepts `ScheduleName` from shared state, finds the schedule by exact name match, reads `schedule.GetTableData()` → `GetSectionData(SectionType.Header)` for column titles (row 0) → `GetSectionData(SectionType.Body)` for data rows. **Key quirk:** `GetCellText(row, col)` always returns a formatted string (e.g. `"20 A"`, not `20.0`) and throws on out-of-range indices — loops must use `NumberOfRows`/`NumberOfColumns` as bounds. Returns `{"schedule_name", "columns", "rows"}`.
+10. `WebSocketServer.cs` — background `HttpListener` on `localhost:8765`. Parses the `command` field from incoming JSON and routes via a switch to the appropriate handler + `ExternalEvent`. Shared `RaiseAndWaitAsync` helper centralises the Denied-check and 5-second timeout so each command arm doesn't repeat it. **Protocol constraint:** each connection handles exactly one request/response cycle then closes. **Receive loop:** `HandleConnectionAsync` accumulates WebSocket frames into a `MemoryStream` until `EndOfMessage` is true — 4096 bytes is the chunk size, not the message size limit. This handles panels with 80+ circuits without truncation.
 
 ## Adding a new tool
 
@@ -162,7 +168,7 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
 | `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Usually stored as an `ElementId` reference — resolve with `doc.GetElement(param.AsElementId()).Name`. In some model configurations `StorageType` is `String` instead; the handler checks both. `AsString()` is not reliable alone. |
 
-| `hp` | `RBS_ELEC_MOTOR_SIZE` on connected element | HP as `double?`; `null` when not a motor/HVAC circuit or parameter absent. Only read for `Motor`/`HVAC` load classifications. |
+| `hp` | `LookupParameter("Motor Size")` on connected element | HP as `double?`; `null` when not a motor/HVAC circuit or parameter absent. `RBS_ELEC_MOTOR_SIZE` does not exist in the Revit 2025 `BuiltInParameter` enum — name-based lookup is used instead. Only read for `Motor`/`HVAC` load classifications. |
 
 **`PanelName` filter:** if `PanelName` is `null`, `CircuitQueryHandler` returns every circuit in the model (no panel filter). No Python tool currently exposes this, but it is available to future tools by passing `"panel": null` (or omitting the key with a null-coalescing read on the C# side).
 
@@ -232,7 +238,6 @@ Every `check_circuit` result contains:
 
 ## Planned features
 
-- **Schedule Export (Step 11) — Next** — `list_schedules()` + `export_schedule(schedule_name)` tools. C# side: `ScheduleListHandler` uses `OfClass(typeof(ViewSchedule))` (not `OfCategory`); `ScheduleExportHandler` reads `GetTableData()` → `GetSectionData(SectionType.Header/Body)` → `GetCellText(row, col)`. Key quirk: `GetCellText()` always returns a formatted string (e.g. `"20 A"`, not `20.0`) and throws on out-of-range indices — guard with `NumberOfRows`/`NumberOfColumns`. Return shape: `{"schedule_name": ..., "columns": [...], "rows": [[...], ...]}`. Requires 4-file wiring (new handlers, App.cs, WebSocketServer.cs, main.py).
 - **Additional NEC rules** — conductor sizing (NEC 310), service entrance (NEC 230), GFCI/AFCI requirements — each as a new function in `nec_rules.py` + a new `@mcp.tool()` in `main.py`. No C# required.
 - **User-selectable code edition** — NEC 2020 vs. 2023 differ in arc-fault requirements; parameterise the rule set.
 - **ASHRAE 90.1 lighting power density checks** — would require a new C# handler to query lighting fixture loads by space type.
@@ -245,7 +250,7 @@ Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP
 
 ## Reference documents
 
-- `Pre_Start.md` — step-by-step learning guide (Steps 1–11) with teaching notes, concept explanations, and "you'll know it worked when" checks. Contains the full design spec for Step 11 (Schedule Export). Read this for the rationale behind architectural decisions.
+- `Pre_Start.md` — step-by-step learning guide (Steps 1–11) with teaching notes, concept explanations, and "you'll know it worked when" checks. Steps 1–11 are all complete. Read this for the rationale behind architectural decisions.
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
 - `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)
 - `AGENTS.md` — near-identical copy of this file for Codex agents (see sync note at top).
