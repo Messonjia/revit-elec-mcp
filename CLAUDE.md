@@ -212,12 +212,13 @@ Every `check_circuit` result contains:
 | `required_amps` | float\|None | `load_amps * 1.25` for 210.20(A); `flc * 2.5` for 430.52; null for spare |
 | `required_rating` | int\|None | `next_standard_size(required_amps)` — minimum for 210.20(A), **maximum** for 430.52 |
 | `is_oversized` | bool | 210.20(A): `actual > required` — status still `"pass"`. Motor: always `False` — being too large is already a `"fail"`, not a flag |
+| `is_zero_load` | bool | `apparent_load_va == 0` on a non-spare circuit — NEC math technically passes (0A → 15A min) but result is meaningless; flag to user as model data issue |
 | `hp` | float\|None | Motor HP used for FLC lookup; `None` for non-motor circuits |
 | `flc_amps` | float\|None | Full-load current from NEC Table 430.248/430.250; `None` for non-motor circuits |
 | `nec_ref` | str\|None | Article string Claude quotes verbatim, e.g. `"NEC 210.20(A)"` |
 | `reason` | str | Full plain-English sentence; Claude can quote or paraphrase |
 
-`check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures. If `_send` returns an error object (e.g. Revit not open), `check_breaker_compliance` detects `isinstance(data, dict) and "error" in data` and surfaces it directly without attempting to apply NEC rules.
+`check_breaker_compliance` wraps these per-circuit results in `{"panel": ..., "summary": {total, pass, fail, manual_review, spare, zero_load_warning}, "circuits": [...]}` so Claude can lead with headline counts before enumerating failures. If `_send` returns an error object (e.g. Revit not open), `check_breaker_compliance` detects `isinstance(data, dict) and "error" in data` and surfaces it directly without attempting to apply NEC rules.
 
 ## Non-obvious behaviors
 

@@ -112,6 +112,8 @@ async def check_breaker_compliance(panel: str) -> str:
       actual_rating    — current breaker rating in the Revit model
       is_oversized     — true if actual_rating > required_rating (protected but larger than needed)
       is_non_standard  — true if actual_rating is not a standard size per NEC 240.6(A)
+      is_zero_load     — true if apparent_load_va is 0 on a non-spare circuit; breaker sizing
+                         cannot be verified — flag this to the user as a model data issue
       nec_ref          — article cited, e.g. "NEC 210.20(A)" or "NEC 430/440"
       reason           — one-sentence plain-English explanation of the result
 
@@ -133,14 +135,44 @@ async def check_breaker_compliance(panel: str) -> str:
     # Count each status so Claude can open with "3 circuits fail, 1 needs manual review"
     # without having to scan the full list itself.
     summary = {
-        "total":         len(results),
-        "pass":          sum(1 for r in results if r["status"] == "pass"),
-        "fail":          sum(1 for r in results if r["status"] == "fail"),
-        "manual_review": sum(1 for r in results if r["status"] == "manual_review"),
-        "spare":         sum(1 for r in results if r["status"] == "spare"),
+        "total":              len(results),
+        "pass":               sum(1 for r in results if r["status"] == "pass"),
+        "fail":               sum(1 for r in results if r["status"] == "fail"),
+        "manual_review":      sum(1 for r in results if r["status"] == "manual_review"),
+        "spare":              sum(1 for r in results if r["status"] == "spare"),
+        "zero_load_warning":  sum(1 for r in results if r.get("is_zero_load", False)),
     }
 
     return json.dumps({"panel": panel, "summary": summary, "circuits": results})
+
+
+@mcp.tool()
+async def list_schedules() -> str:
+    """Return all schedules in the live Revit model as a JSON list.
+    Each entry has an 'id' (integer) and 'name' (string).
+    Call this before export_schedule to discover schedule names.
+    Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
+    # No extra parameters needed — the C# handler finds all ViewSchedules on its own.
+    return await _send({"command": "list_schedules"})
+
+
+@mcp.tool()
+async def export_schedule(schedule_name: str) -> str:
+    """Export a Revit schedule as a JSON table.
+
+    schedule_name — exact name as it appears in the Revit project browser (case-sensitive).
+                    Call list_schedules first to get the correct name.
+
+    Returns:
+      schedule_name — the schedule name
+      columns       — list of column header strings (e.g. ["Circuit Number", "Load Name", "Breaker"])
+      rows          — list of rows; each row is a list of strings matching the column order.
+                      All values are pre-formatted strings as Revit displays them (e.g. "20 A", not 20).
+
+    Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
+    # schedule_name is passed through to C# where it is matched against ViewSchedule.Name.
+    # The match is exact and case-sensitive — use the name returned by list_schedules.
+    return await _send({"command": "export_schedule", "schedule_name": schedule_name})
 
 
 if __name__ == "__main__":

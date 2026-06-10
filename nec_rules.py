@@ -133,6 +133,7 @@ def _check_motor_circuit(circuit: dict, base: dict, hp: float) -> dict:
             "required_amps":   None,
             "required_rating": None,
             "is_oversized":    False,
+            "is_zero_load":    False,
             "nec_ref":         "NEC 430.52",
             "reason": (
                 f"{hp} HP motor at {voltage:.0f}V — no matching entry in NEC Table {table_num}. "
@@ -169,6 +170,7 @@ def _check_motor_circuit(circuit: dict, base: dict, hp: float) -> dict:
         "required_amps":   round(max_amps, 2),
         "required_rating": max_rating,        # this is a MAXIMUM for motors, not a minimum
         "is_oversized":    False,             # "too large" is a fail for motors, not pass+flag
+        "is_zero_load":    False,
         "nec_ref":         "NEC 430.52",
         "reason":          reason,
     }
@@ -211,6 +213,7 @@ def check_circuit(circuit: dict) -> dict:
             "required_amps":   None,
             "required_rating": None,
             "is_oversized":    False,
+            "is_zero_load":    False,
             "nec_ref":         None,
             "reason":          "Spare circuit — no connected elements; NEC sizing not applicable.",
         }
@@ -227,6 +230,7 @@ def check_circuit(circuit: dict) -> dict:
             "required_amps":   None,
             "required_rating": None,
             "is_oversized":    False,
+            "is_zero_load":    False,
             "nec_ref":         "NEC 430.52",
             "reason": (
                 f"{load_classification} load — no HP value found on connected equipment. "
@@ -249,10 +253,19 @@ def check_circuit(circuit: dict) -> dict:
     required_amps   = load_amps * 1.25                     # 210.20(A) 125% factor
     required_rating = next_standard_size(required_amps)    # 240.6(A) rounding
 
+    is_zero_load = (load_va == 0)
     is_fail      = actual_rating < required_rating
     is_oversized = actual_rating > required_rating         # protected, but larger than necessary
 
-    if is_fail:
+    if is_zero_load:
+        # Circuit has connected elements (not spare) but zero modeled VA — likely missing
+        # load data in Revit. The NEC math technically passes (0A → 15A min), but the
+        # result is meaningless without real load data.
+        reason = (
+            f"Zero VA load — circuit has connected elements but no modeled load. "
+            "Breaker sizing cannot be meaningfully verified; check model data."
+        )
+    elif is_fail:
         reason = (
             f"Breaker is {actual_rating}A; NEC 210.20(A) requires {required_rating}A "
             f"for a {load_va:.0f}VA {load_classification.lower()} load at "
@@ -277,6 +290,7 @@ def check_circuit(circuit: dict) -> dict:
         "required_amps":   round(required_amps, 2),
         "required_rating": required_rating,
         "is_oversized":    is_oversized,
+        "is_zero_load":    is_zero_load,
         "nec_ref":         "NEC 210.20(A)",
         "reason":          reason,
     }

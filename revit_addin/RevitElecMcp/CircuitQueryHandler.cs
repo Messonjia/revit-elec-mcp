@@ -58,15 +58,16 @@ public class CircuitQueryHandler : IExternalEventHandler
                         lcName = lcParam.AsString() ?? "Unknown";
 
                     // For motor/HVAC circuits only, look for HP on each connected element.
-                    // RBS_ELEC_MOTOR_SIZE stores horsepower as a dimensionless double in most
-                    // Revit equipment families. Null when absent — check_circuit falls back to
-                    // manual_review so the engineer can size it by hand.
+                    // RBS_ELEC_MOTOR_SIZE does not exist in the Revit 2025 BuiltInParameter enum —
+                    // use LookupParameter by name instead. "Motor Size" is the standard parameter
+                    // name in Revit MEP equipment families; returns null when absent, which causes
+                    // check_circuit to fall back to manual_review.
                     double? hp = null;
                     if (lcName == "Motor" || lcName == "HVAC")
                     {
                         foreach (Element connectedEl in sys.Elements)
                         {
-                            var hpParam = connectedEl.get_Parameter(BuiltInParameter.RBS_ELEC_MOTOR_SIZE);
+                            var hpParam = connectedEl.LookupParameter("Motor Size");
                             if (hpParam is { StorageType: StorageType.Double } && hpParam.AsDouble() > 0)
                             {
                                 hp = hpParam.AsDouble();

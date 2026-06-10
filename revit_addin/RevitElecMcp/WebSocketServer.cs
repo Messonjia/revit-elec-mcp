@@ -16,23 +16,33 @@ public class WebSocketServer
     private readonly ExternalEvent _panelEvent;
     private readonly BreakerFixHandler _breakerFixHandler;
     private readonly ExternalEvent _breakerFixEvent;
+    private readonly ScheduleListHandler _scheduleListHandler;
+    private readonly ExternalEvent _scheduleListEvent;
+    private readonly ScheduleExportHandler _scheduleExportHandler;
+    private readonly ExternalEvent _scheduleExportEvent;
     private readonly HttpListener _listener;
     private CancellationTokenSource? _cts;
 
     public WebSocketServer(
-        ElementQueryHandler elementHandler, ExternalEvent elementEvent,
-        CircuitQueryHandler circuitHandler,  ExternalEvent circuitEvent,
-        PanelQueryHandler panelHandler,      ExternalEvent panelEvent,
-        BreakerFixHandler breakerFixHandler, ExternalEvent breakerFixEvent)
+        ElementQueryHandler   elementHandler,       ExternalEvent elementEvent,
+        CircuitQueryHandler   circuitHandler,       ExternalEvent circuitEvent,
+        PanelQueryHandler     panelHandler,         ExternalEvent panelEvent,
+        BreakerFixHandler     breakerFixHandler,    ExternalEvent breakerFixEvent,
+        ScheduleListHandler   scheduleListHandler,  ExternalEvent scheduleListEvent,
+        ScheduleExportHandler scheduleExportHandler, ExternalEvent scheduleExportEvent)
     {
-        _elementHandler    = elementHandler;
-        _elementEvent      = elementEvent;
-        _circuitHandler    = circuitHandler;
-        _circuitEvent      = circuitEvent;
-        _panelHandler      = panelHandler;
-        _panelEvent        = panelEvent;
-        _breakerFixHandler = breakerFixHandler;
-        _breakerFixEvent   = breakerFixEvent;
+        _elementHandler       = elementHandler;
+        _elementEvent         = elementEvent;
+        _circuitHandler       = circuitHandler;
+        _circuitEvent         = circuitEvent;
+        _panelHandler         = panelHandler;
+        _panelEvent           = panelEvent;
+        _breakerFixHandler    = breakerFixHandler;
+        _breakerFixEvent      = breakerFixEvent;
+        _scheduleListHandler  = scheduleListHandler;
+        _scheduleListEvent    = scheduleListEvent;
+        _scheduleExportHandler = scheduleExportHandler;
+        _scheduleExportEvent  = scheduleExportEvent;
 
         // HttpListener is .NET's built-in HTTP/WebSocket server — no NuGet needed.
         // The trailing slash is required by HttpListener; omitting it throws at Start().
@@ -105,6 +115,9 @@ public class WebSocketServer
                 "fix_breaker"  => await HandleFixBreakerAsync(
                     doc.RootElement.GetProperty("circuit_id").GetInt64(),
                     doc.RootElement.GetProperty("new_rating").GetDouble()),
+                "list_schedules"  => await HandleListSchedulesAsync(),
+                "export_schedule" => await HandleExportScheduleAsync(
+                    doc.RootElement.GetProperty("schedule_name").GetString()),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown command: {command}" })
             };
         }
@@ -147,6 +160,28 @@ public class WebSocketServer
         _breakerFixHandler.NewRating = newRating;
         _breakerFixHandler.Tcs       = tcs;
         return await RaiseAndWaitAsync(_breakerFixEvent, tcs);
+    }
+
+    // list_schedules needs no input — just create the TCS, hand it to the handler,
+    // and raise. The handler will query all ViewSchedules on the UI thread and call
+    // SetResult() to unblock us.
+    private async Task<string> HandleListSchedulesAsync()
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _scheduleListHandler.Tcs = tcs;
+        return await RaiseAndWaitAsync(_scheduleListEvent, tcs);
+    }
+
+    // export_schedule needs one input — the schedule name. We write it to the handler's
+    // ScheduleName property before raising so Execute() can read it on the UI thread.
+    // Writing to a shared property before Raise() is the standard pattern here because
+    // only one connection is in flight at a time (the loop in StartAsync() is sequential).
+    private async Task<string> HandleExportScheduleAsync(string? scheduleName)
+    {
+        var tcs = new TaskCompletionSource<string>();
+        _scheduleExportHandler.ScheduleName = scheduleName;
+        _scheduleExportHandler.Tcs          = tcs;
+        return await RaiseAndWaitAsync(_scheduleExportEvent, tcs);
     }
 
     // Every handler follows the same raise → check denied → await with timeout pattern.
