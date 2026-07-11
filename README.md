@@ -44,15 +44,18 @@ which is Revit's sanctioned way to post work back to the UI thread.
 | `query_elements` | Return all electrical fixtures from the live model |
 | `check_breaker_sizing` | Return raw circuit data for a panel (load, voltage, breaker rating per circuit) |
 | `fix_breaker_size` | Write a corrected breaker rating back to Revit — agentic, requires user confirmation |
-| `check_breaker_compliance` | Apply NEC 210.20(A) rules in Python and return a circuit-by-circuit compliance report |
+| `check_breaker_compliance` | Apply NEC 210.20(A) and NEC 430.52 rules in Python and return a circuit-by-circuit compliance report |
+| `list_schedules` | Return all schedule names in the model — call this first to discover schedule names |
+| `export_schedule` | Export a named Revit schedule as columns + rows, formatted as Revit displays them |
 
 ## Current state
 
 - Full read/write stack working end-to-end: Claude Desktop → MCP server → WebSocket → C# add-in → live Revit model
-- `check_breaker_compliance` applies NEC 210.20(A) as deterministic Python code and returns a structured report — pass/fail/spare/manual_review per circuit with NEC article citations
+- `check_breaker_compliance` applies NEC 210.20(A) and NEC 430.52 as deterministic Python code and returns a structured report — pass/fail/spare/manual_review per circuit with NEC article citations
+- Motor/HVAC circuits sized per NEC 430.52 — breaker capped at 250% of full-load current from NEC Tables 430.248/430.250; circuits without HP data on connected equipment fall back to manual review
 - `fix_breaker_size` writes corrected breaker ratings back to Revit inside a Transaction (undoable with Ctrl+Z)
+- `export_schedule` reads any schedule the engineer built in Revit — conductor sizes, load names, demand factors — as a columns + rows table
 - WebSocket receive uses a chunked read loop — handles panels with 80+ circuits without truncation
-- Motor/HVAC circuits flagged for manual review — NEC 430/440 sizing rules not yet encoded
 
 ## Stack
 

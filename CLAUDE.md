@@ -19,7 +19,7 @@ I'm building this Revit MCP server partly to learn. Default to teaching mode:
 6. If I'm about to do something that won't scale or has a known footgun, 
    tell me before doing it, not after.
 
-> **Keep `AGENTS.md` in sync** — it is a near-identical copy of this file for Codex agents. Update it whenever this file changes.
+> **Keep `AGENTS.md` in sync** — it is an identical copy of this file for Codex agents, except for the title and intro line. Update it whenever this file changes. Do NOT rename "Claude Desktop" to "Codex Desktop" when syncing — Claude Desktop is the actual MCP client this server connects to, regardless of which agent reads the doc.
 
 # Commands
 
@@ -44,6 +44,12 @@ Note: tools that call `_send` will fail unless Revit is also open — `ping` wor
 ```powershell
 .venv\Scripts\python.exe -c "from nec_rules import check_circuit; print(check_circuit({'circuit_number':'1','panel':'P1','apparent_load_va':1800,'voltage':120,'poles':1,'breaker_rating':15,'load_classification':'Lighting','is_spare':False}))"
 ```
+
+**Smoke-test the WebSocket bridge directly (bypasses MCP entirely; requires Revit open with the add-in loaded):**
+```powershell
+.venv\Scripts\python.exe test_ws.py   # sends get_elements to ws://localhost:8765, prints the raw response
+```
+Use this to isolate faults: if `test_ws.py` works but a Claude Desktop tool call fails, the problem is in the MCP layer, not the C# add-in.
 
 **Build the C# Revit add-in:**
 ```powershell
@@ -167,7 +173,6 @@ Revit's API has no thread safety — it is only callable from Revit's own UI thr
 | `poles` | `ElectricalSystem.PolesNumber` | 1 or 3 |
 | `breaker_rating` | `RBS_ELEC_CIRCUIT_RATING_PARAM` | Amps, via `AsDouble()` — NOT run through `ConvertFromInternalUnits` because Revit's internal current unit is already Amps (1:1 ratio). The write path still calls `ConvertToInternalUnits(value, UnitTypeId.Amperes)` for correctness, even though it's a no-op today. |
 | `load_classification` | `RBS_ELEC_LOAD_CLASSIFICATION` | Usually stored as an `ElementId` reference — resolve with `doc.GetElement(param.AsElementId()).Name`. In some model configurations `StorageType` is `String` instead; the handler checks both. `AsString()` is not reliable alone. |
-
 | `hp` | `LookupParameter("Motor Size")` on connected element | HP as `double?`; `null` when not a motor/HVAC circuit or parameter absent. `RBS_ELEC_MOTOR_SIZE` does not exist in the Revit 2025 `BuiltInParameter` enum — name-based lookup is used instead. Only read for `Motor`/`HVAC` load classifications. |
 
 **`PanelName` filter:** if `PanelName` is `null`, `CircuitQueryHandler` returns every circuit in the model (no panel filter). No Python tool currently exposes this, but it is available to future tools by passing `"panel": null` (or omitting the key with a null-coalescing read on the C# side).
@@ -253,4 +258,6 @@ Runtime Python dependencies (from `pyproject.toml`): `mcp[cli]>=1.27.0` (FastMCP
 - `Pre_Start.md` — step-by-step learning guide (Steps 1–11) with teaching notes, concept explanations, and "you'll know it worked when" checks. Steps 1–11 are all complete. Read this for the rationale behind architectural decisions.
 - `Learning_Note.md` — learning journal covering `uv`, PowerShell vs cmd, MCP protocol mechanics, the ExternalEvent threading model, and design decisions with alternatives considered
 - `Data_Layer_Fixes.md` — four Revit API bugs found in first real test (internal units, parameter StorageType, spare circuit detection, ElectricalEquipment vs ElectricalFixtures categories)
-- `AGENTS.md` — near-identical copy of this file for Codex agents (see sync note at top).
+- `README.md` — outward-facing project overview with its own tool table; keep that table in sync when tools change.
+- `AGENTS.md` — identical copy of this file for Codex agents apart from the header (see sync note at top).
+- `test_ws.py` — minimal WebSocket client script used by the smoke-test command above; not a reference doc, but the fastest way to exercise the C# add-in without MCP.

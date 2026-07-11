@@ -46,6 +46,8 @@ async def check_breaker_sizing(panel: str) -> str:
       poles               — 1 (single-phase) or 3 (three-phase)
       breaker_rating      — current breaker size in amperes
       load_classification — Revit load type string, e.g. "Lighting", "Power", "Motor", "HVAC"
+      is_spare            — true when the circuit has no connected elements; NEC sizing not applicable
+      hp                  — motor horsepower (null unless a Motor/HVAC circuit with HP on connected equipment)
 
     Apply NEC rules based on load_classification:
 
@@ -57,11 +59,13 @@ async def check_breaker_sizing(panel: str) -> str:
       Flag if breaker_rating < required_rating (undersized — dangerous).
       Flag if breaker_rating > next standard size above required (oversized — protection defeated).
 
-    For Motor or HVAC loads — NEC 430 / NEC 440:
+    For Motor or HVAC loads — NEC 430.52:
       Do NOT apply the 125% rule. Motor breakers are intentionally oversized to handle
-      starting inrush current (NEC 430.52 allows up to 250% of motor FLC).
-      Report the circuit data as-is and tell the user:
-      "Motor/HVAC load — NEC 430/440 sizing rules not yet implemented. Manual review required."
+      starting inrush current; NEC 430.52 instead CAPS an inverse-time breaker at 250% of
+      the motor's full-load current (FLC) from NEC Table 430.248 (single-phase) or
+      430.250 (three-phase). Flag if breaker_rating exceeds that cap.
+      Prefer check_breaker_compliance for motor circuits — it encodes the FLC tables and
+      applies the cap deterministically. If hp is null, HP is unknown: manual review required.
 
     Requires Revit to be open with a model loaded and the RevitElecMcp add-in active."""
     return await _send({"command": "get_circuits", "panel": panel})
@@ -102,20 +106,30 @@ async def check_breaker_compliance(panel: str) -> str:
     Rules are applied by Python code (not by Claude), so results are deterministic:
     the same load always produces the same required breaker rating.
 
+    Rules applied by load_classification:
+      Lighting/Power/General  — NEC 210.20(A): breaker must be >= 125% of load current
+      Motor/HVAC with HP data — NEC 430.52: breaker must be <= 250% of motor FLC
+                                (FLC from NEC Table 430.248/430.250); exceeding the cap is a fail
+      Motor/HVAC without HP   — status "manual_review": HP is required to size per 430.52
+
     Each entry in the returned 'circuits' list has:
-      status           — "pass", "fail", "spare", or "manual_review"
-      circuit_number   — string, e.g. "3"
-      panel            — panel name
-      load_amps        — actual load current in amperes (null for spare/motor)
-      required_amps    — 125% of load_amps before rounding (null for spare/motor)
-      required_rating  — smallest standard breaker size that satisfies NEC 210.20(A)
-      actual_rating    — current breaker rating in the Revit model
-      is_oversized     — true if actual_rating > required_rating (protected but larger than needed)
-      is_non_standard  — true if actual_rating is not a standard size per NEC 240.6(A)
-      is_zero_load     — true if apparent_load_va is 0 on a non-spare circuit; breaker sizing
-                         cannot be verified — flag this to the user as a model data issue
-      nec_ref          — article cited, e.g. "NEC 210.20(A)" or "NEC 430/440"
-      reason           — one-sentence plain-English explanation of the result
+      status              — "pass", "fail", "spare", or "manual_review"
+      circuit_number      — string, e.g. "3"
+      panel               — panel name
+      load_classification — e.g. "Lighting", "Power", "Motor", "HVAC"
+      load_amps           — load current in amperes (null for spare/motor)
+      hp                  — motor horsepower used for the FLC lookup (null for non-motor)
+      flc_amps            — full-load current from NEC Table 430.248/430.250 (null for non-motor)
+      required_amps       — 125% of load_amps for 210.20(A); 250% of flc_amps for 430.52
+      required_rating     — standard breaker size: a MINIMUM for 210.20(A), a MAXIMUM for 430.52
+      actual_rating       — current breaker rating in the Revit model
+      is_oversized        — 210.20(A) only: true if actual > required (still a pass, just larger
+                            than needed); always false for motors — too large is already a fail
+      is_non_standard     — true if actual_rating is not a standard size per NEC 240.6(A)
+      is_zero_load        — true if apparent_load_va is 0 on a non-spare circuit; breaker sizing
+                            cannot be verified — flag this to the user as a model data issue
+      nec_ref             — article cited, e.g. "NEC 210.20(A)" or "NEC 430.52"
+      reason              — one-sentence plain-English explanation of the result
 
     The 'summary' object gives counts so you can lead with the headline before detailing failures.
 
